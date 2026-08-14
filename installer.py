@@ -112,8 +112,9 @@ def main():
     print("  1) Start Menu")
     print("  2) Desktop")
     print("  3) Both")
+    print("  4) Neither")
     print()
-    sc = _ask_number("Enter 1, 2 or 3: ", 1, 3)
+    sc = _ask_number("Enter 1, 2, 3 or 4: ", 1, 4)
     sc_dirs = []
     if sc in (1, 3):
         sc_dirs.append(_start_menu_dir())
