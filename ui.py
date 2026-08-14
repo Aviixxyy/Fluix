@@ -916,6 +916,14 @@ class SettingsWindow:
         def step(i=0):
             t = (i + 1) / float(steps)
             e = self._ease_out(t)
+            try:
+                alive = (self.sidebar.winfo_exists()
+                         and self._main.winfo_exists())
+            except Exception:
+                alive = False
+            if not alive:
+                self._sidebar_after = None
+                return
             if self._sidebar_open:
                 dx = int(-DW + DW * e)
                 mx = int(CX + (DW - CX) * e)
@@ -953,6 +961,13 @@ class SettingsWindow:
         h = max(1, ty1 - ty0)
 
         def step(i=0):
+            try:
+                if not bar.winfo_exists():
+                    self._bar_after = None
+                    return
+            except Exception:
+                self._bar_after = None
+                return
             e = self._ease_out((i + 1) / float(steps))
             bar.place(x=10, y=int(cy0 + dy0 * e), width=3, height=h)
             if i + 1 < steps:
@@ -1241,6 +1256,13 @@ class SettingsWindow:
         new.place(x=0, y=direction * ch, width=cw, height=ch)
 
         def step(i=0):
+            try:
+                if not new.winfo_exists():
+                    self._page_after = None
+                    return
+            except Exception:
+                self._page_after = None
+                return
             e = self._ease_out((i + 1) / float(steps))
             new.place(x=0, y=int(direction * ch * (1.0 - e)), width=cw, height=ch)
             self.root.update_idletasks()
@@ -1510,6 +1532,16 @@ class SettingsWindow:
         """Apply the accent of the currently selected theme and rebuild the
         window so all widgets pick up the new colors / icon immediately."""
         _set_ui_accent(self.theme)
+        self._cancel_afters()
+        self.sidebar = None
+        self._main = None
+        self.sidebar_bar = None
+        self._bar_pos = {}
+        self.pages = {}
+        self.page_cards = {}
+        self._sidebar_after = None
+        self._bar_after = None
+        self._page_after = None
         for w in self.root.winfo_children():
             w.destroy()
         self.toggle_vars = {}
