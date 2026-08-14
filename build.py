@@ -29,5 +29,5 @@ def build(name, console):
 
 
 if __name__ == "__main__":
-    build("Fluix", console=True)
-    build("FluixGUI", console=False)
+    build("FluixConsole", console=True)
+    build("FluixNoConsole", console=False)

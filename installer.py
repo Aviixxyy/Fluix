@@ -9,8 +9,8 @@ REPO = "Aviixxyy/Fluix"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Fluix-Setup"
 
 LAUNCHERS = {
-    "Fluix.exe": "Console Fluix (ascii art + status in a terminal)",
-    "FluixGUI.exe": "No-console Fluix (silent, GUI only)",
+    "FluixConsole.exe": "Console launcher (ascii art + status in a terminal)",
+    "FluixNoConsole.exe": "No-console launcher (GUI only, no terminal)",
 }
 
 
@@ -112,8 +112,7 @@ def main():
     print("  3) Both")
     print()
     choice = _ask_number("Enter 1, 2 or 3: ", 1, 3)
-    want = ["Fluix.exe", "FluixGUI.exe"] if choice == 3 else [
-        ["Fluix.exe", "FluixGUI.exe"][choice - 1]]
+    want = list(LAUNCHERS) if choice == 3 else [list(LAUNCHERS)[choice - 1]]
 
     print()
     print("Where do you want shortcuts?")

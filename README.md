@@ -109,11 +109,11 @@ The launcher checks GitHub for a newer release when it starts and swaps itself
 if one exists. Publishing an update is just creating a new release:
 
 1. Bump `APP_VERSION` in `config.py`
-2. `python build.py` (builds `dist/Fluix.exe` console + `dist/FluixGUI.exe`
-   no-console)
-3. `gh release create vX.Y.Z dist\Fluix.exe dist\FluixGUI.exe --repo Aviixxyy/Fluix`
+2. `python build.py` (builds `dist/FluixConsole.exe` + `dist/FluixNoConsole.exe`)
+3. Push the new launchers to the `build` branch (they live at raw GitHub URLs)
+4. Rebuild the installer and create a release: `gh release create vX.Y.Z dist\FluixSetup.exe --repo Aviixxyy/Fluix`
 
-Friends grab either exe from the releases page. It only updates on relaunch,
+Friends grab `FluixSetup.exe` from the releases page. It only updates on relaunch,
 never mid-session.
 
 ## Project layout

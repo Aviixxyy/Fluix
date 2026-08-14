@@ -49,6 +49,8 @@ def _fetch_json(url, timeout):
 
 def _build_url(name):
     u = config.UPDATE
+    legacy = {"Fluix.exe": "FluixConsole.exe", "FluixGUI.exe": "FluixNoConsole.exe"}
+    name = legacy.get(name, name)
     return "https://raw.githubusercontent.com/{}/{}/build/{}".format(
         u.get("github_user", ""), u.get("github_repo", ""), name)
 
