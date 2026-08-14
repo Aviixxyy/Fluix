@@ -67,6 +67,7 @@ def profile_save(name, esp_cfg, colors_cfg, stealth_cfg, hud_cfg):
 def profile_delete(name):
     _profiles.pop(name, None)
 _shutdown = threading.Event()
+_close_requested = threading.Event()
 _ui_thread = None
 _SAVE_PATH = os.path.join(config.app_dir(), "settings.json")
 
@@ -2008,6 +2009,7 @@ class SettingsWindow:
     def _close(self):
         self._save()
         self._cancel_afters()
+        _close_requested.set()
         self.root.destroy()
 
     def _toggle_visible(self):
@@ -2048,6 +2050,7 @@ class SettingsWindow:
 def start(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None):
     global _ui_thread
     _shutdown.clear()
+    _close_requested.clear()
     _ui_thread = threading.Thread(target=_run,
                                   args=(esp_cfg, colors_cfg, stealth_cfg,
                                         hud_cfg, games_cfg),
@@ -2060,6 +2063,10 @@ def stop(timeout=2.0):
     _shutdown.set()
     if _ui_thread is not None:
         _ui_thread.join(timeout)
+
+
+def quit_requested():
+    return _close_requested.is_set()
 
 
 def _run(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None):

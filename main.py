@@ -567,6 +567,8 @@ def main():
     overlay_mod.user32.GetCursorPos.restype = wt.BOOL
 
     while running:
+        if ui_mod is not None and ui_mod.quit_requested():
+            running = False
         if _pressed(config.KEYS["quit"]):
             running = False
         if _pressed(config.KEYS["toggle"]):
