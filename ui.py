@@ -1493,7 +1493,17 @@ class SettingsWindow:
             return
         self.theme = name
         themes.apply(name)
+        if self.hud.get("follow_theme", True):
+            self._sync_hud_theme()
         self._retheme()
+
+    def _sync_hud_theme(self):
+        bg, border, text = themes.hud_palette(self.theme)
+        self.hud["bg"] = list(bg)
+        self.hud["border"] = list(border)
+        self.hud["text"] = list(text)
+        for key, sw in self.hud_colors.items():
+            sw.set_color(tuple(self.hud.get(key, (255, 255, 255))))
 
     def _retheme(self):
         """Apply the accent of the currently selected theme and rebuild the
@@ -1614,7 +1624,19 @@ class SettingsWindow:
             ("border", "Border"),
             ("text", "Text"),
         ]
-        color_row = g_next(sticky="we", py=(10, 0))
+        theme_row = g_next(sticky="w", py=(10, 0))
+        tvar = tk.BooleanVar(value=bool(self.hud.get("follow_theme", True)))
+        self.hud_vars["follow_theme"] = tvar
+        ttgl = Toggle(theme_row, value=tvar.get())
+        ttgl.command = lambda: self._toggle_hud_theme(ttgl.get())
+        ttgl.pack(side="left")
+        ttxt = tk.Label(theme_row, text="Match theme accent", bg=CARD, fg=TEXT,
+                        font=(FONT, 9), cursor="hand2")
+        ttxt.pack(side="left", padx=(8, 0))
+        self._bind_tip((theme_row, ttgl, ttxt),
+                       "Use the selected theme's accent color for the HUD "
+                       "boxes. Turn off to pick custom colors below.")
+        color_row = g_next(sticky="we", py=(4, 0))
         tk.Label(color_row, text="Colors", bg=CARD, fg=TEXT,
                  font=(FONT, 9)).pack(side="left")
         self.hud_colors = {}
@@ -1643,6 +1665,11 @@ class SettingsWindow:
                       "Boxes snap to each other's edges.",
                  bg=CARD, fg=MUTED, font=(FONT, 8), justify="left",
                  wraplength=560).pack(side="left")
+
+    def _toggle_hud_theme(self, on):
+        self.hud["follow_theme"] = on
+        if on:
+            self._sync_hud_theme()
 
     def _pick_hud_color(self, key):
         current = self.hud.get(key, [255, 255, 255])

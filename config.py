@@ -144,6 +144,7 @@ HUD = {
     "fps": True,
     "ping": True,
     "players": True,
+    "follow_theme": True,
     "bg": [18, 20, 26],
     "border": [139, 92, 246],
     "text": [236, 234, 242],
@@ -159,7 +160,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "1.0.2"
+APP_VERSION = "1.0.3"
 
 
 

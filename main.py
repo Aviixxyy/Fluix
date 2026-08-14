@@ -512,6 +512,11 @@ def main():
         if ui_mod.load(config.ESP, config.COLORS, config.STEALTH, config.HUD,
                        config.GAMES):
             print("[i] Loaded saved settings.")
+        if config.HUD.get("follow_theme", True):
+            bg, border, text = themes.hud_palette(themes.active())
+            config.HUD["bg"] = list(bg)
+            config.HUD["border"] = list(border)
+            config.HUD["text"] = list(text)
         ui_mod.start(config.ESP, config.COLORS, config.STEALTH, config.HUD,
                      config.GAMES)
         print("[i] Settings window opened.")

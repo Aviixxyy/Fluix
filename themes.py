@@ -317,6 +317,14 @@ def meta(name):
     return THEMES.get(name, THEMES[DEFAULT])
 
 
+def hud_palette(name):
+    accent = meta(name)["accent"]
+    border = tuple(accent)
+    bg = tuple(int(c * 0.09) for c in accent)
+    text = (236, 234, 242)
+    return bg, border, text
+
+
 def apply(name, png=PNG_PATH, ico=ICO_PATH):
     if name not in THEMES:
         name = DEFAULT
