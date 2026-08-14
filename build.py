@@ -15,6 +15,9 @@ ICON = "fluix.ico"
 def build(name, console):
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
            "--onefile", "--icon", ICON, "--name", name, "main.py"]
+    cmd += ["--add-data", "offsets_bundled.json;.",
+            "--add-data", "fluix.ico;.",
+            "--add-data", "fluix.png;."]
     if not console:
         cmd.append("--windowed")
     print("==> building {} (console={})".format(name, console))

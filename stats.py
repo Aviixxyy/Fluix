@@ -18,6 +18,7 @@ import struct
 import threading
 import time
 
+import config
 import memory
 
 try:
@@ -27,7 +28,7 @@ except Exception:
     np = None
     HAVE_NUMPY = False
 
-_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stats_cache.json")
+_CACHE = os.path.join(config.app_dir(), "stats_cache.json")
 
 _PAGE_READWRITE = 0x04
 _PAGE_WRITECOPY = 0x08

@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import colorchooser
 from tkinter import font as tkfont
 
+import config
 import status
 import themes
 
@@ -67,7 +68,7 @@ def profile_delete(name):
     _profiles.pop(name, None)
 _shutdown = threading.Event()
 _ui_thread = None
-_SAVE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+_SAVE_PATH = os.path.join(config.app_dir(), "settings.json")
 
 
 def _trace(msg):
@@ -77,8 +78,8 @@ def _trace(msg):
         sys.stderr.flush()
     except Exception:
         pass
-_ICON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fluix.ico")
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fluix.png")
+_ICON_PATH = os.path.join(config.bundle_dir(), "fluix.ico")
+_LOGO_PATH = os.path.join(config.bundle_dir(), "fluix.png")
 
 
 BG = "#17181c"

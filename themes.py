@@ -10,6 +10,7 @@ launcher splash, the settings preview and the tray/titlebar icon stay in
 sync per theme.
 """
 
+import config
 import json
 import math
 import os
@@ -17,10 +18,9 @@ import random
 
 from PIL import Image, ImageDraw
 
-_DIR = os.path.dirname(os.path.abspath(__file__))
-PNG_PATH = os.path.join(_DIR, "fluix.png")
-ICO_PATH = os.path.join(_DIR, "fluix.ico")
-SETTINGS_PATH = os.path.join(_DIR, "settings.json")
+PNG_PATH = os.path.join(config.bundle_dir(), "fluix.png")
+ICO_PATH = os.path.join(config.bundle_dir(), "fluix.ico")
+SETTINGS_PATH = os.path.join(config.app_dir(), "settings.json")
 
 SIZE = 256
 BW, BH = 96, 16

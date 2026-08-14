@@ -1,3 +1,19 @@
+import os
+import sys
+
+
+def app_dir():
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def bundle_dir():
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 PROCESS_NAME = "RobloxPlayerBeta.exe"
 
 ESP = {

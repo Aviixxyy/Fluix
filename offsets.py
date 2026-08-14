@@ -1,8 +1,9 @@
+import config
 import json
 import os
 import urllib.request
 
-BUNDLED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "offsets_bundled.json")
+BUNDLED = os.path.join(config.bundle_dir(), "offsets_bundled.json")
 
 
 def _load_bundled():
