@@ -610,7 +610,7 @@ def main():
             continue
 
         fg = overlay_mod.user32.GetForegroundWindow()
-        if fg != game_hwnd or (ui_mod is not None and ui_mod.is_open()):
+        if fg != game_hwnd:
             overlay.hide()
             time.sleep(0.05)
             continue
