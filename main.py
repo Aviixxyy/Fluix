@@ -488,6 +488,21 @@ def main():
 
     _print_launcher()
 
+    u_cfg = config.UPDATE
+    if (u_cfg.get("enabled", True) and updater.frozen()
+            and u_cfg.get("github_user") and u_cfg.get("github_repo")):
+        try:
+            result = updater.check_for_update()
+            if result:
+                version, url = result
+                print("[i] Update v{} found - downloading...".format(version))
+                if updater.apply_update(version, url):
+                    updater.notify(version)
+                    print("[i] Update staged - restarting to apply.")
+                    return 0
+        except Exception:
+            pass
+
     mem = memory.MemoryReader()
     if not mem.open(config.PROCESS_NAME):
         print("[!] Could not open Roblox process '{}'.".format(config.PROCESS_NAME))
@@ -539,26 +554,6 @@ def main():
     stats_started = False
     stats_ready_at = 0.0
 
-    update_state = {"quit": False}
-
-    def _updater_thread():
-        try:
-            result = updater.check_for_update()
-            if not result:
-                return
-            version, url = result
-            print("[i] Update v{} found - downloading...".format(version))
-            if updater.apply_update(version, url):
-                updater.notify(version)
-                update_state["quit"] = True
-        except Exception:
-            pass
-
-    u_cfg = config.UPDATE
-    if (u_cfg.get("enabled", True) and updater.frozen()
-            and u_cfg.get("github_user") and u_cfg.get("github_repo")):
-        threading.Thread(target=_updater_thread, daemon=True).start()
-
     def _stats_done():
         if stats_finder.state == "done":
             status.log("[i] Stats scan done: fps_addr=0x{:X} ping_addr=0x{:X}".format(
@@ -572,9 +567,6 @@ def main():
     overlay_mod.user32.GetCursorPos.restype = wt.BOOL
 
     while running:
-        if update_state["quit"]:
-            running = False
-            break
         if _pressed(config.KEYS["quit"]):
             running = False
         if _pressed(config.KEYS["toggle"]):
