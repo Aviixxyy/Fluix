@@ -47,6 +47,12 @@ def _fetch_json(url, timeout):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _build_url(name):
+    u = config.UPDATE
+    return "https://raw.githubusercontent.com/{}/{}/build/{}".format(
+        u.get("github_user", ""), u.get("github_repo", ""), name)
+
+
 def check_for_update():
     """Return (version, download_url) if a newer release exists, else None."""
     try:
@@ -57,14 +63,7 @@ def check_for_update():
         version = tag.lstrip("v")
         if not compare_versions(config.APP_VERSION, version):
             return None
-        assets = data.get("assets") or []
-        if not assets:
-            return None
-        want = os.path.basename(current_exe()).lower()
-        for asset in assets:
-            if (asset.get("name") or "").lower() == want:
-                return version, asset["browser_download_url"]
-        return version, assets[0]["browser_download_url"]
+        return version, _build_url(os.path.basename(current_exe()))
     except Exception:
         return None
 
