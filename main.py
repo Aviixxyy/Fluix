@@ -92,14 +92,6 @@ def _pressed(vk):
     return state and not prev
 
 
-def _is_settings_window(hwnd):
-    if not hwnd:
-        return False
-    wpid = wt.DWORD()
-    overlay_mod.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
-    return wpid.value == ctypes.windll.kernel32.GetCurrentProcessId()
-
-
 def _flush_key():
     time.sleep(0.25)
 
@@ -618,7 +610,7 @@ def main():
             continue
 
         fg = overlay_mod.user32.GetForegroundWindow()
-        if fg != game_hwnd and not _is_settings_window(fg):
+        if fg != game_hwnd:
             overlay.hide()
             time.sleep(0.05)
             continue

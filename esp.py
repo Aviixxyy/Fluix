@@ -314,13 +314,14 @@ class EspReader(threading.Thread):
         With auto_preset on, the preset whose place_id matches the currently
         joined game wins. Otherwise the first enabled preset is used.
         """
-        if self.esp_cfg.get("auto_preset", True) and place_id:
-            for key, g in self.games_cfg.items():
-                pid = g.get("place_id")
-                if pid and str(pid) == str(place_id):
-                    return key
+        if self.esp_cfg.get("auto_preset", True):
+            if place_id:
+                for key, g in self.games_cfg.items():
+                    pid = g.get("place_id")
+                    if pid and str(pid) == str(place_id):
+                        return key
+            return None
         for key, g in self.games_cfg.items():
             if g.get("enabled"):
                 return key
-        return None
         return None
