@@ -1,0 +1,53 @@
+{
+  "source": "https://offsets.imtheo.lol",
+  "roblox_version": "version-d584fb6c717a43d9",
+  "dumped_at": "2026-08-06",
+  "offsets": {
+    "FakeDataModel": {
+      "Pointer": 145086280,
+      "RealDataModel": 464
+    },
+    "Instance": {
+      "NameContainer": 112,
+      "Name": 8,
+      "ChildrenStart": 120,
+      "ChildrenEnd": 8,
+      "Parent": 104,
+      "ClassDescriptor": 24,
+      "ClassName": 8
+    },
+    "DataModel": {
+      "Workspace": 352,
+      "PlaceId": 392,
+      "GameId": 384
+    },
+    "Workspace": {
+      "CurrentCamera": 1176
+    },
+    "Camera": {
+      "Position": 252,
+      "Rotation": 216,
+      "FieldOfView": 320
+    },
+    "Player": {
+      "LocalPlayer": 304,
+      "UserId": 768,
+      "DisplayName": 312,
+      "ModelInstance": 664,
+      "Team": 728,
+      "TeamColor": 940
+    },
+    "Humanoid": {
+      "Health": 400,
+      "MaxHealth": 424,
+      "HumanoidRootPart": 1144
+    },
+    "BasePart": {
+      "Primitive": 296
+    },
+    "Primitive": {
+      "Position": 236,
+      "Rotation": 248
+    }
+  }
+}

@@ -1,0 +1,8 @@
+__pycache__/
+build/
+dist/
+*.spec
+settings.json
+stats_cache.json
+NEXT_AI_BRIEFING.md
+strip_comments.py
