@@ -66,10 +66,18 @@ def _make_shortcut(target, link):
         return False
 
 
-def _install_dir():
-    base = os.environ.get("LOCALAPPDATA") or os.path.join(
-        os.environ.get("USERPROFILE", os.getcwd()), "AppData", "Local")
-    return os.path.join(base, "Fluix")
+def _choose_install_dir():
+    print("Where should Fluix be installed?")
+    print("  1) Downloads\\Fluix")
+    print("  2) Pick a folder")
+    print()
+    loc = _ask_number("Enter 1 or 2: ", 1, 2)
+    if loc == 2:
+        while True:
+            path = input("Full folder path (e.g. C:\\Fluix): ").strip()
+            if path:
+                return path
+    return os.path.join(os.environ.get("USERPROFILE", ""), "Downloads", "Fluix")
 
 
 def _start_menu_dir():
@@ -121,7 +129,7 @@ def main():
     if sc in (2, 3):
         sc_dirs.append(_desktop_dir())
 
-    install_dir = _install_dir()
+    install_dir = _choose_install_dir()
     os.makedirs(install_dir, exist_ok=True)
 
     print()
