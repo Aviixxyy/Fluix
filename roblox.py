@@ -164,6 +164,29 @@ def get_camera(mem, ws, offs):
     return find_child_of_class(mem, ws, "Camera", offs)
 
 
+def _vec_len(v):
+    return math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+
+
+def _vec_dot(a, b):
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _camera_valid(right, up, back, fov):
+    for v in (right, up, back):
+        if not (0.8 < _vec_len(v) < 1.2):
+            return False
+    if abs(_vec_dot(right, up)) > 0.2:
+        return False
+    if abs(_vec_dot(up, back)) > 0.2:
+        return False
+    if abs(_vec_dot(right, back)) > 0.2:
+        return False
+    if not (0.2 < fov < 2.6):
+        return False
+    return True
+
+
 def read_camera(mem, cam, offs, anchor=None):
     """Read the camera.
 
@@ -187,6 +210,8 @@ def read_camera(mem, cam, offs, anchor=None):
     up = (rot[1], rot[4], rot[7])
     back = (rot[2], rot[5], rot[8])
     fov = mem.f32(cam + (O(offs, "Camera", "FieldOfView") or 0x140))
+    if not _camera_valid(right, up, back, fov):
+        return None
     stored = mem.vec3(cam + (O(offs, "Camera", "Position") or 0xFC))
     pos = stored
     if anchor and pos:
@@ -272,11 +297,14 @@ def get_part_position(mem, part, offs):
 
 
 def get_character_extents(mem, char, root_pos, offs):
-    """Compute (min_y, max_y) across all BasePart descendants of a model.
+    """Compute the character's (foot_offset, head_offset) relative to its
+    root part, across all BasePart descendants of the model.
 
     Only parts within a plausible vertical band around the root part are
     counted, so floating accessories (hats, props) don't inflate the box.
-    Returns None if no usable parts were found.
+    Returning offsets (not absolute Y) lets the box track the root part while
+    jumping, even when the result is cached. Returns None if no usable parts
+    were found.
     """
     if not char or not root_pos:
         return None
@@ -306,7 +334,7 @@ def get_character_extents(mem, char, root_pos, offs):
 
     if max_y - min_y > 14.0:
         return None
-    return (min_y, max_y)
+    return (min_y - root_y, max_y - root_y)
 
 
 def get_team_name(mem, player, offs):

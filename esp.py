@@ -52,6 +52,9 @@ class EspReader(threading.Thread):
         self._role_cache = {}
         self._warned_no_team = False
         self._waiting = False
+        self._last_camera = None
+        self._game_names = {}
+        self._game_name_lookups = {}
         self.snapshot = {
             "camera": None,
             "local_pos": None,
@@ -199,6 +202,10 @@ class EspReader(threading.Thread):
 
         cam = roblox.get_camera(mem, ws, offs)
         camera = roblox.read_camera(mem, cam, offs, anchor=local_anchor) if cam else None
+        if camera is None:
+            camera = self._last_camera
+        else:
+            self._last_camera = camera
 
         entries = []
         for p in roblox.get_children(mem, players, offs):
@@ -299,14 +306,45 @@ class EspReader(threading.Thread):
                 items.append({"name": name, "pos": ipos,
                               "distance": math.sqrt(dx * dx + dz * dz)})
 
+        preset_name = (game_cfg.get("name", game_key) if game_cfg else "")
+        game_name = self._game_names.get(game_id) or preset_name
+        if game_id and not game_name and game_id not in self._game_name_lookups:
+            self._game_name_lookups[game_id] = True
+            threading.Thread(target=self._lookup_game_name, args=(game_id,),
+                             daemon=True, name="GameName").start()
+
         self._publish(camera=camera, local_pos=local_pos, local_team=local_team,
                       entries=entries, items=items, ok=True, message="",
                       server_players=server_count, ping=None, game=game_key,
-                      game_id=game_id,
-                      game_name=(game_cfg.get("name", game_key) if game_cfg else ""))
+                      game_id=game_id, game_name=game_name)
         self._push_status(camera=camera, targets=len(entries), game=game_key,
-                          game_name=(game_cfg.get("name", game_key) if game_cfg else ""),
-                          game_id=game_id)
+                          game_name=game_name, game_id=game_id)
+
+    def _lookup_game_name(self, place_id):
+        try:
+            import json
+            import urllib.request
+            uid = ""
+            req = urllib.request.Request(
+                "https://apis.roblox.com/universes/v1/places/{}/universe".format(place_id),
+                headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6) as resp:
+                uid = json.loads(resp.read().decode("utf-8", "replace")).get("universeId") or ""
+            name = ""
+            if uid:
+                req2 = urllib.request.Request(
+                    "https://games.roblox.com/v1/games?universeIds={}".format(uid),
+                    headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req2, timeout=6) as resp2:
+                    data = json.loads(resp2.read().decode("utf-8", "replace")).get("data") or []
+                    if data:
+                        name = data[0].get("name", "") or ""
+            if name:
+                self._game_names[place_id] = name
+        except Exception:
+            pass
+        finally:
+            self._game_name_lookups.pop(place_id, None)
 
     def _active_game(self, place_id=0):
         """Pick the preset to apply.

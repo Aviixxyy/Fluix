@@ -1153,12 +1153,12 @@ class SettingsWindow:
                   "esp: {}".format("on" if s["esp"] else "off"))
             game = (s.get("game") or "").strip()
             gid = s.get("game_id") or 0
-            if game:
+            if game or gid:
                 dot, lab = self._status["game"]
                 dot.configure(fg=ACCENT)
                 gid_txt = " ({})".format(gid) if gid else ""
-                lab.configure(text="game: {}{}".format(game, gid_txt))
-                self._fit_game_label(lab, game, gid_txt)
+                lab.configure(text="game: {}{}".format(game or "unknown", gid_txt))
+                self._fit_game_label(lab, game or "unknown", gid_txt)
             else:
                 dot, lab = self._status["game"]
                 dot.configure(fg=muted)

@@ -176,8 +176,8 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
         pos = entry["pos"]
         extents = entry.get("extents")
         if extents:
-            foot = (pos[0], extents[0], pos[2])
-            head = (pos[0], extents[1], pos[2])
+            foot = (pos[0], pos[1] + extents[0], pos[2])
+            head = (pos[0], pos[1] + extents[1], pos[2])
         else:
             foot = (pos[0], pos[1] - foot_off, pos[2])
             head = (pos[0], pos[1] + head_off, pos[2])
