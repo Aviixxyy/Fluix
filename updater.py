@@ -80,7 +80,7 @@ def _download(url, dest, timeout):
 def apply_update(version, url):
     """Download the new exe and schedule a swap + relaunch on exit.
 
-    The running exe cannot replace itself, so a small hidden batch file polls
+    The running exe cannot replace itself, so a small hidden VBScript polls
     until this process is gone, copies the new exe over the old one and starts
     it again. Returns True if the update is staged.
     """
@@ -91,24 +91,36 @@ def apply_update(version, url):
         _download(url, new_exe, config.UPDATE.get("download_timeout", 120))
         if not os.path.exists(new_exe) or os.path.getsize(new_exe) < 100000:
             return False
-        bat = os.path.join(tempfile.gettempdir(), "Fluix_update.bat")
-        with open(bat, "w", encoding="utf-8") as f:
+        lock = os.path.join(tempfile.gettempdir(), "Fluix_update.lock")
+        try:
+            fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.close(fd)
+        except OSError:
+            return False
+        vbs = os.path.join(tempfile.gettempdir(), "Fluix_update.vbs")
+        esc = lambda s: s.replace('"', '""')
+        with open(vbs, "w", encoding="utf-8") as f:
             f.write(
-                "@echo off\r\n"
-                "setlocal EnableExtensions\r\n"
-                'set "SELF={exe}"\r\n'
-                'set "NEW={new}"\r\n'
-                ":wait\r\n"
-                'copy /y "%NEW%" "%SELF%" >nul 2>&1\r\n'
-                "if not errorlevel 1 goto relaunch\r\n"
-                "ping -n 2 127.0.0.1 >nul\r\n"
-                "goto wait\r\n"
-                ":relaunch\r\n"
-                'del "%NEW%" >nul 2>&1\r\n'
-                'start "" "%SELF%"\r\n'
-                "exit\r\n".format(exe=exe, new=new_exe))
-        subprocess.Popen(["cmd.exe", "/c", bat],
-                         creationflags=0x08000000 | 0x00000008,
+                'Set fso = CreateObject("Scripting.FileSystemObject")\r\n'
+                'Set sh = CreateObject("WScript.Shell")\r\n'
+                'n = 0\r\n'
+                'Do\r\n'
+                '    On Error Resume Next\r\n'
+                '    fso.CopyFile "{new}", "{exe}", True\r\n'
+                '    ok = (Err.Number = 0)\r\n'
+                '    On Error GoTo 0\r\n'
+                '    If ok Then Exit Do\r\n'
+                '    WScript.Sleep 1000\r\n'
+                '    n = n + 1\r\n'
+                '    If n >= 90 Then Exit Do\r\n'
+                'Loop\r\n'
+                'On Error Resume Next\r\n'
+                'fso.DeleteFile "{lock}"\r\n'
+                'On Error GoTo 0\r\n'
+                'sh.Run "{exe}", 1, False\r\n'.format(
+                    lock=esc(lock), new=esc(new_exe), exe=esc(exe)))
+        subprocess.Popen(["wscript.exe", vbs],
+                         creationflags=0x08000000,
                          close_fds=True)
         return True
     except Exception:
