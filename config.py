@@ -160,7 +160,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 
 
 
@@ -169,6 +169,6 @@ UPDATE = {
     "enabled": True,
     "github_user": "Aviixxyy",
     "github_repo": "Fluix",
-    "check_timeout": 8,
+    "check_timeout": 3,
     "download_timeout": 120,
 }

@@ -1865,6 +1865,9 @@ class SettingsWindow:
         close_btn = AccentButton(foot, "CLOSE", command=self._close, filled=False,
                                  width=120, height=36)
         close_btn.pack(side="right", expand=True, fill="x", padx=(6, 0))
+        ver = tk.Label(parent, text="v{}".format(config.APP_VERSION), bg=BG,
+                       fg=MUTED, font=(FONT, 8))
+        ver.pack(side="bottom", anchor="e", padx=(0, 22), pady=(0, 4))
 
     def _build_profiles(self, parent):
         card = Card(parent, "Config profiles")

@@ -87,6 +87,7 @@ def _read_flats(mem, chunks):
         except Exception:
             buf = None
         out.append(buf)
+        time.sleep(0.001)
     return out
 
 
@@ -228,10 +229,11 @@ def _pick_ping(chunks, ping_cands, frame_cands):
 def _scan_once(mem, hint=None):
     regions = []
     scanned = 0
+    max_bytes = MAX_SCAN_BYTES if HAVE_NUMPY else 32 * 1024 * 1024
     for addr, size in _writable_regions(mem):
-        if scanned >= MAX_SCAN_BYTES:
+        if scanned >= max_bytes:
             break
-        size = min(size, MAX_SCAN_BYTES - scanned)
+        size = min(size, max_bytes - scanned)
         regions.append((addr, size))
         scanned += size
     if not regions:
@@ -313,6 +315,12 @@ class Finder:
 
         def _run():
             try:
+                import ctypes
+                try:
+                    ctypes.windll.kernel32.SetThreadPriority(
+                        ctypes.windll.kernel32.GetCurrentThread(), -15)
+                except Exception:
+                    pass
                 addrs = _load_cache(version)
                 if addrs and self._validate(addrs):
                     self.fps_addr = addrs[0]

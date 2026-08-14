@@ -1,6 +1,7 @@
 import config
 import json
 import os
+import threading
 import urllib.request
 
 BUNDLED = os.path.join(config.bundle_dir(), "offsets_bundled.json")
@@ -27,17 +28,21 @@ def load(cfg):
     version = bundled.get("roblox_version", "unknown")
 
     if cfg.get("auto_fetch", True):
-        try:
-            remote = _fetch(cfg.get("fetch_url"), cfg.get("fetch_timeout", 8))
-            if isinstance(remote, dict) and remote.get("Offsets"):
-                data = remote["Offsets"]
-                source = "remote (https://offsets.imtheo.lol)"
-                version = remote.get("Roblox Version", version)
-                print("[i] Offsets: {} | version {}".format(source, version))
-            else:
-                print("[i] Remote offsets empty; using bundled offsets.")
-        except Exception as exc:
-            print("[i] Offsets fetch failed ({}); using bundled offsets.".format(exc))
-            print("[i] Bundled version: {}".format(version))
+
+        def _fetch_remote():
+            try:
+                remote = _fetch(cfg.get("fetch_url"), cfg.get("fetch_timeout", 8))
+                if isinstance(remote, dict) and remote.get("Offsets"):
+                    data.clear()
+                    data.update(remote["Offsets"])
+                    print("[i] Offsets: remote | version {}".format(
+                        remote.get("Roblox Version", version)))
+                else:
+                    print("[i] Remote offsets empty; using bundled offsets.")
+            except Exception as exc:
+                print("[i] Offsets fetch failed ({}); using bundled offsets.".format(exc))
+
+        threading.Thread(target=_fetch_remote, daemon=True,
+                         name="OffsetFetch").start()
 
     return {"data": data, "version": version, "source": source}
