@@ -133,3 +133,7 @@ themes.py             launcher theme art + accent palettes
 ui.py                 settings window
 updater.py            GitHub auto-update
 ```
+
+
+
+## THIS IS ENTIRELY VIBECODED.
