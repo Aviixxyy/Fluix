@@ -46,6 +46,9 @@ ESP = {
     "item_classes": "Tool",
     "item_distance": 300.0,
     "role_refresh_s": 2.0,
+    "occlusion": False,
+    "occ_scan_s": 4.0,
+    "occ_rate": 0.12,
 }
 
 
@@ -117,12 +120,27 @@ STEALTH = {
     "update_hz": 144.0,
     "jitter": 0.02,
     "skip_chance": 0.0,
-    "humanize": False,
+    "humanize": True,
     "hz_min": 90.0,
     "hz_max": 144.0,
     "pause_min": 0.0,
     "pause_max": 0.0,
     "validate_every": 120,
+}
+
+AIMBOT = {
+    "enabled": False,
+    "mode": "hold",
+    "hotkey": 0x45,
+    "fov_px": 250.0,
+    "speed": 0.06,
+    "max_distance": 300.0,
+    "target": "head",
+    "stutter": 3.0,
+    "curve": 0.5,
+    "orbit_radius": 60.0,
+    "lock_keep": 1.5,
+    "show_fov": True,
 }
 
 OFFSETS = {
@@ -160,7 +178,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "1.0.11"
+APP_VERSION = "1.0.12"
 
 
 

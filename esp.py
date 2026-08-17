@@ -4,6 +4,7 @@ import threading
 import time
 
 import memory
+import occlusion
 import roblox
 import status
 import ui
@@ -37,13 +38,18 @@ def _classify_role(team, tools, game_cfg):
 
 
 class EspReader(threading.Thread):
-    def __init__(self, mem, offsets, esp_cfg, stealth_cfg, games_cfg=None):
+    def __init__(self, mem, offsets, esp_cfg, stealth_cfg, games_cfg=None,
+                 pergame=None):
         super().__init__(daemon=True, name="EspReader")
         self.mem = mem
         self.offs = offsets
         self.esp_cfg = esp_cfg
         self.stealth = stealth_cfg
         self.games_cfg = games_cfg or {}
+        self._pergame = pergame
+        self._pergame_game = None
+        self._occ = None
+        self._last_occ = 0.0
         self._lock = threading.Lock()
         self._stop = False
         self._dm = 0
@@ -54,6 +60,8 @@ class EspReader(threading.Thread):
         self._waiting = False
         self._last_camera = None
         self._game_names = {}
+        self._hz_cur = None
+        self._hz_burst = 0
         self._game_name_lookups = {}
         self.snapshot = {
             "camera": None,
@@ -68,6 +76,8 @@ class EspReader(threading.Thread):
             "game": None,
             "game_id": 0,
             "game_name": "",
+            "cam_addr": 0,
+            "local_anchor": None,
         }
 
     def stop(self):
@@ -111,7 +121,11 @@ class EspReader(threading.Thread):
             if self.stealth.get("humanize", False):
                 lo = max(float(self.stealth.get("hz_min", 60.0)), 1.0)
                 hi = max(float(self.stealth.get("hz_max", hz)), lo)
-                hz = random.uniform(lo, hi)
+                if self._hz_cur is None or self._hz_burst <= 0:
+                    self._hz_cur = random.uniform(lo, hi)
+                    self._hz_burst = random.randint(4, 9)
+                hz = self._hz_cur
+                self._hz_burst -= 1
             jitter = float(self.stealth.get("jitter", 0.4))
             delay = (1.0 / hz) * random.uniform(1.0 - jitter, 1.0 + jitter)
             if random.random() < float(self.stealth.get("skip_chance", 0.0)):
@@ -120,10 +134,10 @@ class EspReader(threading.Thread):
             pause_max = float(self.stealth.get("pause_max", 0.0))
             if pause_max > pause_min:
                 delay += random.uniform(pause_min, pause_max)
-            delay = max(delay, 0.02)
+            delay = max(delay, 0.004)
             deadline = time.monotonic() + delay
             while time.monotonic() < deadline and not self._stop:
-                time.sleep(0.02)
+                time.sleep(0.002)
 
     def _collect(self, update):
         mem = self.mem
@@ -160,6 +174,12 @@ class EspReader(threading.Thread):
         self._waiting = False
 
         game_id = roblox.get_place_id(mem, dm, offs)
+        if game_id:
+            if self._pergame is not None and game_id != self._pergame_game:
+                self._pergame.on_game_change(game_id)
+                self._pergame_game = game_id
+        else:
+            self._pergame_game = None
         game_key = self._active_game(game_id)
         game_cfg = self.games_cfg.get(game_key) if game_key else None
 
@@ -291,6 +311,7 @@ class EspReader(threading.Thread):
                 "extents": extents,
                 "tool": tool,
                 "role": role,
+                "occluded": False,
             })
 
         items = []
@@ -306,6 +327,17 @@ class EspReader(threading.Thread):
                 items.append({"name": name, "pos": ipos,
                               "distance": math.sqrt(dx * dx + dz * dz)})
 
+        if esp.get("occlusion", False) and camera and entries \
+                and now - self._last_occ >= float(esp.get("occ_rate", 0.12)):
+            self._last_occ = now
+            if self._occ is None:
+                self._occ = occlusion.OcclusionTracker(mem, offs)
+            self._occ.set_refresh(float(esp.get("occ_scan_s", 4.0)))
+            self._occ.pump(now, ws)
+            self._apply_occlusion(camera, entries, esp)
+        elif not esp.get("occlusion", False) and self._occ is not None:
+            self._occ.drop()
+
         preset_name = (game_cfg.get("name", game_key) if game_cfg else "")
         game_name = self._game_names.get(game_id) or preset_name
         if game_id and not game_name and game_id not in self._game_name_lookups:
@@ -316,7 +348,8 @@ class EspReader(threading.Thread):
         self._publish(camera=camera, local_pos=local_pos, local_team=local_team,
                       entries=entries, items=items, ok=True, message="",
                       server_players=server_count, ping=None, game=game_key,
-                      game_id=game_id, game_name=game_name)
+                      game_id=game_id, game_name=game_name,
+                      cam_addr=cam, local_anchor=local_anchor)
         self._push_status(camera=camera, targets=len(entries), game=game_key,
                           game_name=game_name, game_id=game_id)
 
@@ -345,6 +378,30 @@ class EspReader(threading.Thread):
             pass
         finally:
             self._game_name_lookups.pop(place_id, None)
+
+    def _apply_occlusion(self, camera, entries, esp):
+        occ = self._occ
+        height = float(esp.get("character_height", 5.0))
+        ratio = float(esp.get("hrp_ratio", 0.45))
+        points = []
+        idx = []
+        for i, e in enumerate(entries):
+            e["occluded"] = False
+            if e.get("is_local") or not e.get("alive", True):
+                continue
+            pos = e["pos"]
+            ext = e.get("extents")
+            if ext:
+                py = pos[1] + ext[1]
+            else:
+                py = pos[1] + height - height * ratio
+            points.append((pos[0], py, pos[2]))
+            idx.append(i)
+        if not points or not occ.ready():
+            return
+        blocked = occ.raycast_many(camera.pos, points)
+        for i, b in zip(idx, blocked):
+            entries[i]["occluded"] = bool(b)
 
     def _active_game(self, place_id=0):
         """Pick the preset to apply.

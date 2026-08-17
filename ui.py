@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 import os
@@ -6,9 +7,15 @@ import tkinter as tk
 from tkinter import colorchooser
 from tkinter import font as tkfont
 
+import ctypes
+
 import config
 import status
 import themes
+
+_user32 = ctypes.WinDLL("user32", use_last_error=True)
+_user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+_user32.GetAsyncKeyState.restype = ctypes.c_short
 
 _ORIG_UNRAISABLE = None
 
@@ -113,7 +120,8 @@ def _apply_icon(root):
         pass
 
 
-def save(esp_cfg, colors_cfg, stealth_cfg, theme=None, hud=None, games=None):
+def save(esp_cfg, colors_cfg, stealth_cfg, theme=None, hud=None, games=None,
+         aim_cfg=None):
     data = {
         "esp": dict(esp_cfg),
         "colors": {k: list(v) for k, v in colors_cfg.items()},
@@ -138,6 +146,15 @@ def save(esp_cfg, colors_cfg, stealth_cfg, theme=None, hud=None, games=None):
             }
             for k, g in games.items()
         }
+    if aim_cfg:
+        data["aimbot"] = dict(aim_cfg)
+    try:
+        import pergame
+        store = pergame.get_store()
+        if store is not None:
+            data["per_game"] = store.dump()
+    except Exception:
+        pass
     if _profiles:
         data["profiles"] = _profiles
     try:
@@ -148,7 +165,8 @@ def save(esp_cfg, colors_cfg, stealth_cfg, theme=None, hud=None, games=None):
         return False
 
 
-def load(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None):
+def load(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None,
+         aim_cfg=None):
     try:
         with open(_SAVE_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -165,6 +183,10 @@ def load(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None):
         for key, value in data.get("hud", {}).items():
             if key in hud_cfg:
                 hud_cfg[key] = value
+    if aim_cfg:
+        for key, value in data.get("aimbot", {}).items():
+            if key in aim_cfg:
+                aim_cfg[key] = value
     if games_cfg:
         for key, g in data.get("games", {}).items():
             if key not in games_cfg:
@@ -325,6 +347,30 @@ TOOLTIPS = {
     "item_range": "How close an item must be to appear on the ESP.",
     "update_hz": "How many times per second the game memory is read.",
     "humanize": "Varies the read rate randomly to look less robotic.",
+    "occlusion": "Dims the box of players that are behind walls. Uses a "
+                 "cached raycast against the map's parts.",
+    "aim_enabled": "Gently eases your crosshair onto the closest enemy. "
+                   "Never writes game memory.",
+    "aim_mode": "HOLD aims while you hold the key. ON FIRE aims while you "
+                "hold the fire button.",
+    "aim_hotkey": "Key that enables aim assist while held.",
+    "aim_fov": "How close to your crosshair an enemy must be before the "
+               "assist engages (in pixels).",
+    "aim_show_fov": "Draws a circle on screen showing the aim assist's FOV "
+                    "range around your crosshair.",
+    "aim_speed": "How fast the crosshair eases onto the target. Lower is "
+                 "snappier, higher is smoother.",
+    "aim_distance": "Furthest enemy distance (in studs) the assist will "
+                    "engage at.",
+    "aim_target": "Which part of the enemy the assist aims at.",
+    "aim_stutter": "Random micro-shake added to the movement so it looks "
+                   "like a human hand.",
+    "aim_curve": "How much the path curves instead of travelling straight "
+                 "to the target.",
+    "aim_orbit": "Distance at which the crosshair spirals in around the "
+                 "target for a natural landing.",
+    "aim_lock": "How strongly the aim holds onto a locked target before "
+                "letting you pull off and switch. Higher = stickier.",
 }
 
 STATUS_TOOLTIPS = {
@@ -334,6 +380,71 @@ STATUS_TOOLTIPS = {
     "targets": "How many players are currently detected.",
     "esp": "Whether ESP drawing is enabled (F8 toggles it).",
 }
+
+_KEYSYM_VK = {
+    "space": 0x20, "Tab": 0x09, "Return": 0x0D, "Escape": 0x1B,
+    "BackSpace": 0x08, "Delete": 0x2E, "Insert": 0x2D,
+    "Home": 0x24, "End": 0x23, "Prior": 0x21, "Next": 0x22,
+    "Left": 0x25, "Right": 0x27, "Up": 0x26, "Down": 0x28,
+    "Shift_L": 0x10, "Shift_R": 0x10,
+    "Control_L": 0x11, "Control_R": 0x11,
+    "Alt_L": 0x12, "Alt_R": 0x12,
+    "Win_L": 0x5B, "Win_R": 0x5C,
+    "comma": 0xBC, "period": 0xBE, "slash": 0xBF,
+    "minus": 0xBD, "equal": 0xBB, "semicolon": 0xBA,
+    "apostrophe": 0xDE, "bracketleft": 0xDB, "bracketright": 0xDD,
+    "backslash": 0xDC, "grave": 0xC0,
+}
+
+_PRETTY_VK = {
+    0x20: "Space", 0x09: "Tab", 0x0D: "Enter", 0x1B: "Esc",
+    0x08: "Backspace", 0x10: "Shift", 0x11: "Ctrl", 0x12: "Alt",
+    0x2E: "Del", 0x2D: "Ins", 0x24: "Home", 0x23: "End",
+    0x21: "PgUp", 0x22: "PgDn", 0x25: "Left", 0x27: "Right",
+    0x26: "Up", 0x28: "Down",
+}
+
+_MOUSE_VK = {
+    0x01: "Left mouse", 0x02: "Right mouse", 0x04: "Middle mouse",
+    0x05: "Mouse 4", 0x06: "Mouse 5",
+}
+
+_MOUSE_CAPTURE_VKS = (0x02, 0x04, 0x05, 0x06)
+
+
+def _keysym_to_vk(name):
+    if name.startswith("F") and name[1:].isdigit():
+        n = int(name[1:])
+        if 1 <= n <= 24:
+            return 0x70 + n - 1
+    if name in _KEYSYM_VK:
+        return _KEYSYM_VK[name]
+    if len(name) == 1:
+        if name.isdigit():
+            return ord(name)
+        if name.isalpha():
+            return ord(name.upper())
+    return None
+
+
+def _vk_to_label(vk, presets):
+    for name, code in presets.items():
+        if code == vk:
+            return name
+    if vk in _MOUSE_VK:
+        return _MOUSE_VK[vk]
+    if 0x30 <= vk <= 0x39:
+        return chr(vk)
+    if 0x41 <= vk <= 0x5A:
+        return chr(vk)
+    if 0x70 <= vk <= 0x87:
+        return "F" + str(vk - 0x70 + 1)
+    rev = {}
+    for k, v in _KEYSYM_VK.items():
+        rev.setdefault(v, k)
+    if vk in rev:
+        return _PRETTY_VK.get(vk, rev[vk].rstrip("_LR").title())
+    return "Key {}".format(hex(vk))
 
 _HUD_DEFAULT_LAYOUT = {
     "fps": [12, 12, 96, 30],
@@ -354,7 +465,7 @@ class Tooltip:
         self._cancel()
         if not text:
             return
-        self._after = self.root.after(450, lambda: self._show(text))
+        self._after = self.root.after(200, lambda: self._show(text))
 
     def _show(self, text):
         try:
@@ -789,17 +900,19 @@ class NumberField(tk.Canvas):
 
 class SettingsWindow:
     TABS = (("display", "DISPLAY"), ("distance", "DISTANCE"),
-            ("colors", "COLORS"), ("rate", "READ RATE"), ("themes", "THEMES"),
-            ("hud", "HUD"), ("profiles", "CONFIGS"), ("games", "GAMES"))
+            ("colors", "COLORS"), ("rate", "READ RATE"), ("aim", "AIM"),
+            ("themes", "THEMES"), ("hud", "HUD"), ("profiles", "CONFIGS"),
+            ("games", "GAMES"))
 
     def __init__(self, root, esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None,
-                 games_cfg=None):
+                 games_cfg=None, aim_cfg=None):
         self.root = root
         self.esp = esp_cfg
         self.colors = colors_cfg
         self.stealth = stealth_cfg
         self.hud = hud_cfg or {}
         self.games = games_cfg or {}
+        self.aim = aim_cfg or {}
         self.theme = themes.active()
         _trace("theme resolved")
         self.tooltip = Tooltip(root)
@@ -1062,6 +1175,23 @@ class SettingsWindow:
         self.content = tk.Frame(parent, bg=BG)
         self.content.pack(fill="both", expand=True)
 
+        self._scroll_canvas = tk.Canvas(self.content, bg=BG, highlightthickness=0,
+                                        bd=0)
+        self._scroll_canvas.pack(side="left", fill="both", expand=True)
+        self._scrollbar = tk.Scrollbar(self.content, orient="vertical",
+                                       command=self._scroll_canvas.yview,
+                                       bg=BG, activebackground=CARD,
+                                       troughcolor=BG, bd=0, width=10,
+                                       relief="flat", highlightthickness=0)
+        self._scrollbar.pack(side="right", fill="y")
+        self._scroll_canvas.configure(yscrollcommand=self._scrollbar.set)
+        self._page_host = tk.Frame(self._scroll_canvas, bg=BG)
+        self._host_item = self._scroll_canvas.create_window(
+            (0, 0), window=self._page_host, anchor="nw")
+        self._page_host.bind("<Configure>", self._on_host_configure)
+        self._scroll_canvas.bind("<Configure>", self._on_canvas_configure)
+        self.root.bind_all("<MouseWheel>", self._on_wheel)
+
         self._card_i = 0
         self._page_key = None
         self.pages = {}
@@ -1071,6 +1201,7 @@ class SettingsWindow:
             ("distance", self._build_distance),
             ("colors", self._build_colors),
             ("rate", self._build_readrate),
+            ("aim", self._build_aim),
             ("themes", self._build_themes),
             ("hud", self._build_hud),
             ("profiles", self._build_profiles),
@@ -1078,7 +1209,7 @@ class SettingsWindow:
         )
         for key, builder in builders:
             _trace("building page: " + key)
-            page = tk.Frame(self.content, bg=BG)
+            page = tk.Frame(self._page_host, bg=BG)
             self._page_key = key
             self.page_cards[key] = []
             self._card_i = 0
@@ -1088,6 +1219,23 @@ class SettingsWindow:
 
         self._build_footer(parent)
         self._show_page(self._current)
+
+    def _on_host_configure(self, _=None):
+        self._scroll_canvas.configure(
+            scrollregion=self._scroll_canvas.bbox("all"))
+
+    def _on_canvas_configure(self, _=None):
+        self._scroll_canvas.itemconfigure(
+            self._host_item, width=max(1, self._scroll_canvas.winfo_width()))
+
+    def _on_wheel(self, event):
+        try:
+            if self._scroll_canvas.winfo_exists():
+                self._scroll_canvas.yview_scroll(
+                    -1 * (event.delta // 120), "units")
+        except Exception:
+            pass
+        return "break"
 
     def _build_status_bar(self, parent=None):
         parent = parent or self.root
@@ -1206,6 +1354,7 @@ class SettingsWindow:
 
     def _show_page(self, key):
         self._current = key
+        self._scroll_canvas.yview_moveto(0)
         for name, page in self.pages.items():
             page.place_forget()
             if name == key:
@@ -1246,7 +1395,7 @@ class SettingsWindow:
                 self.root.after_cancel(self._page_after)
             except Exception:
                 pass
-        cw = content.winfo_width()
+        cw = self._scroll_canvas.winfo_width()
         keys = [k for k, _ in self.TABS]
         try:
             direction = 1 if keys.index(key) >= keys.index(old_key) else -1
@@ -1314,6 +1463,47 @@ class SettingsWindow:
         if TOOLTIPS.get(key):
             self._bind_tip((cell, tgl, txt), TOOLTIPS[key])
 
+    def _add_reset_button(self, parent, key):
+        row = tk.Frame(parent, bg=CARD)
+        row.pack(fill="x", padx=14, pady=(2, 12))
+        btn = AccentButton(row, "RESET TO DEFAULTS",
+                           command=lambda k=key: self._reset_tab(k),
+                           filled=False, width=200, height=32)
+        btn.pack(side="left")
+        self._bind_tip((row, btn),
+                       "Restores every setting on this tab to the built-in "
+                       "defaults.")
+
+    def _reset_tab(self, key):
+        if key in ("display", "distance"):
+            self.esp.clear()
+            self.esp.update(copy.deepcopy(config.ESP))
+        elif key == "colors":
+            self.colors.clear()
+            self.colors.update(copy.deepcopy(config.COLORS))
+        elif key == "rate":
+            self.stealth.clear()
+            self.stealth.update(copy.deepcopy(config.STEALTH))
+        elif key == "aim":
+            self.aim.clear()
+            self.aim.update(copy.deepcopy(config.AIMBOT))
+        elif key == "themes":
+            self.theme = config.THEME
+            themes.apply(self.theme)
+            if self.hud.get("follow_theme", True):
+                self._sync_hud_theme()
+        elif key == "hud":
+            self.hud.clear()
+            self.hud.update(copy.deepcopy(config.HUD))
+            if self.hud.get("follow_theme", True):
+                self._sync_hud_theme()
+        elif key == "profiles":
+            _profiles.clear()
+        elif key == "games":
+            self.games.clear()
+            self.games.update(copy.deepcopy(config.GAMES))
+        self._retheme()
+
     def _build_display(self, parent):
         card = Card(parent, "Display")
         self._stagger(card)
@@ -1332,6 +1522,7 @@ class SettingsWindow:
             ("highlight_target", "Target highlight"),
             ("skip_dead", "Skip dead"),
             ("item_esp", "Item ESP"),
+            ("occlusion", "Occlusion check"),
         ]
         for i, (key, label) in enumerate(rows):
             self._add_toggle(card.body, i // 2, i % 2, key, label)
@@ -1365,6 +1556,7 @@ class SettingsWindow:
         self.dead_tval.config(text="{}%".format(int(round(float(
             self.esp.get("dead_tracer_scale", 0.55)) * 100.0))))
         self._bind_tip((trow, self.dead_tracer), TOOLTIPS["dead_tracer"])
+        self._add_reset_button(card.body, "display")
 
     def _build_distance(self, parent):
         card = Card(parent, "Distance")
@@ -1406,6 +1598,7 @@ class SettingsWindow:
             command=self._on_item_range_slide, width=250)
         self.item_range.pack(fill="x", pady=(6, 0))
         self._bind_tip((irange_row, self.item_range), TOOLTIPS["item_range"])
+        self._add_reset_button(card.body, "distance")
 
     def _build_colors(self, parent):
         card = Card(parent, "Colors")
@@ -1435,6 +1628,7 @@ class SettingsWindow:
             tk.Label(cell, text=label, bg=CARD, fg=TEXT,
                      font=(FONT, 9)).pack(side="left", padx=(8, 0))
             self.color_buttons[key] = sw
+        self._add_reset_button(card.body, "colors")
 
     def _build_readrate(self, parent):
         card = Card(parent, "Read rate")
@@ -1465,6 +1659,314 @@ class SettingsWindow:
         tk.Label(hrow, text="Humanize (random 90-144 Hz)", bg=CARD, fg=TEXT,
                  font=(FONT, 9)).pack(side="left", padx=(8, 0))
         self._bind_tip((hrow, tgl), TOOLTIPS["humanize"])
+        self._add_reset_button(card.body, "rate")
+
+    def _build_aim(self, parent):
+        card = Card(parent, "Aim assist")
+        self._stagger(card)
+
+        grid_i = [0]
+
+        def g_next(columnspan=2, sticky="w", px=(0, 16), py=(8, 0)):
+            row = grid_i[0]
+            grid_i[0] += 1
+            f = tk.Frame(card.body, bg=CARD)
+            f.grid(row=row, column=0, columnspan=columnspan, sticky=sticky,
+                   padx=px, pady=py)
+            return f
+
+        note_row = g_next(sticky="we", py=(0, 4))
+        tk.Label(note_row,
+                 text="Gently eases your crosshair onto the closest enemy "
+                      "with a curved, human-like path. No game memory is "
+                      "written.",
+                 bg=CARD, fg=MUTED, font=(FONT, 8), justify="left",
+                 wraplength=540).pack(anchor="w", fill="x")
+
+        en_row = g_next(sticky="we", py=(12, 0))
+        var = tk.BooleanVar(value=bool(self.aim.get("enabled", False)))
+        self.aim_vars = {"enabled": var}
+        tgl = Toggle(en_row, value=var.get())
+        tgl.command = lambda t=tgl: (var.set(t.get()),
+                                     self.aim.__setitem__("enabled", t.get()))
+        tgl.pack(side="left")
+        txt = tk.Label(en_row, text="Aim assist", bg=CARD, fg=TEXT,
+                       font=(FONT, 9, "bold"), cursor="hand2")
+        txt.pack(side="left", padx=(8, 0))
+        self._bind_tip((en_row, tgl, txt), TOOLTIPS["aim_enabled"])
+
+        mode_row = g_next(sticky="we")
+        tk.Label(mode_row, text="Trigger", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_mode = self.aim.get("mode", "hold")
+        self.aim_mode_btns = {}
+        for key, label in (("hold", "HOLD"), ("click", "ON FIRE")):
+            b = SegButton(mode_row, label, selected=(key == self.aim_mode),
+                          command=lambda k=key: self._pick_aim_mode(k),
+                          width=72)
+            b.pack(side="left", padx=(8, 0))
+            self.aim_mode_btns[key] = b
+        self._bind_tip((mode_row,), TOOLTIPS["aim_mode"])
+
+        hot_row = g_next(sticky="we")
+        tk.Label(hot_row, text="Hold key", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_hot_options = {
+            "E": 0x45, "Q": 0x51, "V": 0x56, "X": 0x58,
+            "Right mouse": 0x02, "Shift": 0x10,
+        }
+        cur = self.aim.get("hotkey", 0x45)
+        label = _vk_to_label(cur, self.aim_hot_options)
+        self.aim_hot = tk.StringVar(value=label)
+        options = list(self.aim_hot_options.keys()) + ["Custom..."]
+        om = tk.OptionMenu(hot_row, self.aim_hot, *options,
+                           command=self._on_aim_hotkey)
+        om.configure(bg=INPUT, fg=TEXT, activebackground=ACCENT,
+                     activeforeground="#ffffff", relief="flat",
+                     highlightthickness=1, highlightbackground=GHOST_BORDER,
+                     font=(FONT, 9), width=14)
+        menu = om["menu"]
+        menu.configure(bg=INPUT, fg=TEXT, activebackground=ACCENT,
+                       activeforeground="#ffffff", relief="flat",
+                       font=(FONT, 9))
+        om.pack(side="left", padx=(10, 0))
+        self._bind_tip((hot_row, om), TOOLTIPS["aim_hotkey"])
+
+        fov_row = g_next(sticky="we")
+        tk.Label(fov_row, text="FOV (px)", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_fov_val = tk.Label(fov_row, text="", bg=CARD, fg=MUTED,
+                                    font=(FONT, 8))
+        self.aim_fov_val.pack(side="right")
+        self.aim_fov = ModernSlider(
+            fov_row, 20, 500, float(self.aim.get("fov_px", 250.0)),
+            command=self._on_aim_fov_slide, width=300)
+        self.aim_fov.pack(fill="x", pady=(6, 0))
+        self.aim_fov_val.config(text="{}px".format(int(round(
+            float(self.aim.get("fov_px", 250.0))))))
+        self._bind_tip((fov_row, self.aim_fov), TOOLTIPS["aim_fov"])
+
+        show_fov_row = g_next(sticky="we")
+        sf_var = tk.BooleanVar(value=bool(self.aim.get("show_fov", True)))
+        self.aim_show_fov = sf_var
+        sf_tgl = Toggle(show_fov_row, value=sf_var.get())
+        sf_tgl.command = lambda t=sf_tgl: (sf_var.set(t.get()),
+                                           self.aim.__setitem__("show_fov",
+                                                                t.get()))
+        sf_tgl.pack(side="left")
+        sf_txt = tk.Label(show_fov_row, text="Show aim FOV circle",
+                          bg=CARD, fg=TEXT, font=(FONT, 9), cursor="hand2")
+        sf_txt.pack(side="left", padx=(8, 0))
+        sf_txt.bind("<Button-1>", lambda e, t=sf_tgl: t.set(not t.get()))
+        self._bind_tip((show_fov_row, sf_tgl, sf_txt),
+                       TOOLTIPS["aim_show_fov"])
+
+        dist_row = g_next(sticky="we")
+        tk.Label(dist_row, text="Max distance", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_dist_val = tk.Label(dist_row, text="", bg=CARD, fg=MUTED,
+                                     font=(FONT, 8))
+        self.aim_dist_val.pack(side="right")
+        self.aim_dist = ModernSlider(
+            dist_row, 50, 1500, float(self.aim.get("max_distance", 300.0)),
+            command=self._on_aim_dist_slide, width=300)
+        self.aim_dist.pack(fill="x", pady=(6, 0))
+        self.aim_dist_val.config(text="{} studs".format(int(round(
+            float(self.aim.get("max_distance", 300.0))))))
+        self._bind_tip((dist_row, self.aim_dist), TOOLTIPS["aim_distance"])
+
+        spd_row = g_next(sticky="we")
+        tk.Label(spd_row, text="Smoothness", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_spd_val = tk.Label(spd_row, text="", bg=CARD, fg=MUTED,
+                                    font=(FONT, 8))
+        self.aim_spd_val.pack(side="right")
+        self.aim_speed = ModernSlider(
+            spd_row, 20, 400, float(self.aim.get("speed", 0.12)) * 1000.0,
+            command=self._on_aim_speed_slide, width=300)
+        self.aim_speed.pack(fill="x", pady=(6, 0))
+        self.aim_spd_val.config(text="{} ms".format(int(round(
+            float(self.aim.get("speed", 0.12)) * 1000.0))))
+        self._bind_tip((spd_row, self.aim_speed), TOOLTIPS["aim_speed"])
+
+        tgt_row = g_next(sticky="we")
+        tk.Label(tgt_row, text="Aim point", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_target = self.aim.get("target", "head")
+        self.aim_target_btns = {}
+        for key, label in (("head", "HEAD"), ("torso", "TORSO")):
+            b = SegButton(tgt_row, label, selected=(key == self.aim_target),
+                          command=lambda k=key: self._pick_aim_target(k),
+                          width=72)
+            b.pack(side="left", padx=(8, 0))
+            self.aim_target_btns[key] = b
+        self._bind_tip((tgt_row,), TOOLTIPS["aim_target"])
+
+        stut_row = g_next(sticky="we")
+        tk.Label(stut_row, text="Micro stutter", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_stut_val = tk.Label(stut_row, text="", bg=CARD, fg=MUTED,
+                                     font=(FONT, 8))
+        self.aim_stut_val.pack(side="right")
+        self.aim_stutter = ModernSlider(
+            stut_row, 0, 12, float(self.aim.get("stutter", 3.0)),
+            command=self._on_aim_stutter_slide, width=300)
+        self.aim_stutter.pack(fill="x", pady=(6, 0))
+        self.aim_stut_val.config(text="{} px".format(int(round(
+            float(self.aim.get("stutter", 3.0))))))
+        self._bind_tip((stut_row, self.aim_stutter), TOOLTIPS["aim_stutter"])
+
+        curve_row = g_next(sticky="we")
+        tk.Label(curve_row, text="Curve", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_curve_val = tk.Label(curve_row, text="", bg=CARD, fg=MUTED,
+                                      font=(FONT, 8))
+        self.aim_curve_val.pack(side="right")
+        self.aim_curve = ModernSlider(
+            curve_row, 0, 1.2, float(self.aim.get("curve", 0.5)),
+            command=self._on_aim_curve_slide, width=300)
+        self.aim_curve.pack(fill="x", pady=(6, 0))
+        self.aim_curve_val.config(text="{:.2f}".format(
+            float(self.aim.get("curve", 0.5))))
+        self._bind_tip((curve_row, self.aim_curve), TOOLTIPS["aim_curve"])
+
+        orb_row = g_next(sticky="we")
+        tk.Label(orb_row, text="Orbit radius", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_orb_val = tk.Label(orb_row, text="", bg=CARD, fg=MUTED,
+                                    font=(FONT, 8))
+        self.aim_orb_val.pack(side="right")
+        self.aim_orbit = ModernSlider(
+            orb_row, 10, 200, float(self.aim.get("orbit_radius", 60.0)),
+            command=self._on_aim_orbit_slide, width=300)
+        self.aim_orbit.pack(fill="x", pady=(6, 0))
+        self.aim_orb_val.config(text="{} px".format(int(round(
+            float(self.aim.get("orbit_radius", 60.0))))))
+        self._bind_tip((orb_row, self.aim_orbit), TOOLTIPS["aim_orbit"])
+
+        lock_row = g_next(sticky="we")
+        tk.Label(lock_row, text="Target lock", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_lock_val = tk.Label(lock_row, text="", bg=CARD, fg=MUTED,
+                                     font=(FONT, 8))
+        self.aim_lock_val.pack(side="right")
+        self.aim_lock = ModernSlider(
+            lock_row, 5, 30, float(self.aim.get("lock_keep", 1.5)) * 10.0,
+            command=self._on_aim_lock_slide, width=300)
+        self.aim_lock.pack(fill="x", pady=(6, 0))
+        self.aim_lock_val.config(text="{:.1f}".format(
+            float(self.aim.get("lock_keep", 1.5))))
+        self._bind_tip((lock_row, self.aim_lock), TOOLTIPS["aim_lock"])
+        self._add_reset_button(card.body, "aim")
+
+    def _pick_aim_mode(self, key):
+        self.aim["mode"] = key
+        self.aim_mode = key
+        for k, b in self.aim_mode_btns.items():
+            b.select(k == key)
+
+    def _on_aim_hotkey(self, name):
+        if name == "Custom...":
+            self._begin_hotkey_capture()
+            return
+        vk = self.aim_hot_options.get(name)
+        if vk is not None:
+            self.aim["hotkey"] = vk
+
+    def _begin_hotkey_capture(self):
+        self._finish_hotkey_capture()
+        self._capturing = True
+        self.aim_hot.set("Press a key...")
+        self._capture_after = self.root.after(6000,
+                                              self._finish_hotkey_capture)
+        self.root.focus_force()
+        self._capture_bind = self.root.bind("<Key>",
+                                            self._on_hotkey_capture)
+        self._mouse_after = self.root.after(40, self._poll_mouse_capture)
+
+    def _on_hotkey_capture(self, event):
+        vk = _keysym_to_vk(event.keysym)
+        if vk is not None:
+            self.aim["hotkey"] = vk
+            self.aim_hot.set(_vk_to_label(vk, self.aim_hot_options))
+            self._finish_hotkey_capture()
+        return "break"
+
+    def _poll_mouse_capture(self):
+        if not getattr(self, "_capturing", False):
+            return
+        for vk in _MOUSE_CAPTURE_VKS:
+            if _user32.GetAsyncKeyState(vk) & 0x8000:
+                self.aim["hotkey"] = vk
+                self.aim_hot.set(_vk_to_label(vk, self.aim_hot_options))
+                self._finish_hotkey_capture()
+                return
+        self._mouse_after = self.root.after(40, self._poll_mouse_capture)
+
+    def _finish_hotkey_capture(self):
+        if getattr(self, "_capture_after", None) is not None:
+            try:
+                self.root.after_cancel(self._capture_after)
+            except Exception:
+                pass
+            self._capture_after = None
+        if getattr(self, "_capture_bind", None) is not None:
+            try:
+                self.root.unbind("<Key>", self._capture_bind)
+            except Exception:
+                pass
+            self._capture_bind = None
+        if getattr(self, "_mouse_after", None) is not None:
+            try:
+                self.root.after_cancel(self._mouse_after)
+            except Exception:
+                pass
+            self._mouse_after = None
+        if getattr(self, "_capturing", False):
+            self._capturing = False
+            self.aim_hot.set(_vk_to_label(
+                self.aim.get("hotkey", 0x45), self.aim_hot_options))
+
+    def _on_aim_fov_slide(self, _=None):
+        v = int(round(self.aim_fov.get()))
+        self.aim["fov_px"] = v
+        self.aim_fov_val.config(text="{}px".format(v))
+
+    def _on_aim_dist_slide(self, _=None):
+        v = int(round(self.aim_dist.get()))
+        self.aim["max_distance"] = v
+        self.aim_dist_val.config(text="{} studs".format(v))
+
+    def _on_aim_speed_slide(self, _=None):
+        v = int(round(self.aim_speed.get()))
+        self.aim["speed"] = v / 1000.0
+        self.aim_spd_val.config(text="{} ms".format(v))
+
+    def _pick_aim_target(self, key):
+        self.aim["target"] = key
+        self.aim_target = key
+        for k, b in self.aim_target_btns.items():
+            b.select(k == key)
+
+    def _on_aim_stutter_slide(self, _=None):
+        v = int(round(self.aim_stutter.get()))
+        self.aim["stutter"] = float(v)
+        self.aim_stut_val.config(text="{} px".format(v))
+
+    def _on_aim_curve_slide(self, _=None):
+        v = round(self.aim_curve.get(), 2)
+        self.aim["curve"] = v
+        self.aim_curve_val.config(text="{:.2f}".format(v))
+
+    def _on_aim_orbit_slide(self, _=None):
+        v = int(round(self.aim_orbit.get()))
+        self.aim["orbit_radius"] = float(v)
+        self.aim_orb_val.config(text="{} px".format(v))
+
+    def _on_aim_lock_slide(self, _=None):
+        v = round(self.aim_lock.get() / 10.0, 1)
+        self.aim["lock_keep"] = v
+        self.aim_lock_val.config(text="{:.1f}".format(v))
 
     def _build_themes(self, parent):
         card = Card(parent, "Theme")
@@ -1487,6 +1989,7 @@ class SettingsWindow:
         self.preview.pack(fill="x", pady=(0, 6))
 
         self._refresh_preview()
+        self._add_reset_button(card.body, "themes")
 
     def _theme_tile(self, parent, name):
         m = themes.meta(name)
@@ -1698,6 +2201,7 @@ class SettingsWindow:
                       "Boxes snap to each other's edges.",
                  bg=CARD, fg=MUTED, font=(FONT, 8), justify="left",
                  wraplength=560).pack(side="left")
+        self._add_reset_button(card.body, "hud")
 
     def _toggle_hud_theme(self, on):
         self.hud["follow_theme"] = on
@@ -1748,6 +2252,7 @@ class SettingsWindow:
         if not self.games:
             tk.Label(card.body, text="No presets defined yet.", bg=CARD, fg=TEXT,
                      font=(FONT, 9)).pack(anchor="w", pady=(12, 0))
+            self._add_reset_button(card.body, "games")
             return
 
         sel_row = tk.Frame(card.body, bg=CARD)
@@ -1793,6 +2298,7 @@ class SettingsWindow:
         self._game_editor = tk.Frame(card.body, bg=CARD)
         self._game_editor.pack(fill="x", pady=(4, 0))
         self._build_game_editor()
+        self._add_reset_button(card.body, "games")
 
     def _on_preset_change(self, name):
         key = self._game_names.get(name)
@@ -1896,6 +2402,7 @@ class SettingsWindow:
         self._profile_list = tk.Frame(card.body, bg=CARD)
         self._profile_list.pack(fill="x")
         self._build_profile_list()
+        self._add_reset_button(card.body, "profiles")
 
     def _build_profile_list(self):
         for w in self._profile_list.winfo_children():
@@ -2036,7 +2543,8 @@ class SettingsWindow:
             self.stealth["hz_max"] = float(self.stealth.get("hz_max", 144.0))
 
     def _save(self):
-        if save(self.esp, self.colors, self.stealth, self.theme, self.hud):
+        if save(self.esp, self.colors, self.stealth, self.theme, self.hud,
+                aim_cfg=self.aim):
             print("[i] Settings saved to settings.json")
         else:
             print("[!] Failed to save settings.")
@@ -2082,13 +2590,14 @@ class SettingsWindow:
             self.color_buttons[key].set_color(self.colors[key])
 
 
-def start(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None):
+def start(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None,
+          aim_cfg=None):
     global _ui_thread
     _shutdown.clear()
     _close_requested.clear()
     _ui_thread = threading.Thread(target=_run,
                                   args=(esp_cfg, colors_cfg, stealth_cfg,
-                                        hud_cfg, games_cfg),
+                                        hud_cfg, games_cfg, aim_cfg),
                                   daemon=True, name="SettingsUI")
     _ui_thread.start()
     return _ui_thread
@@ -2104,14 +2613,16 @@ def quit_requested():
     return _close_requested.is_set()
 
 
-def _run(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None):
+def _run(esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None, games_cfg=None,
+         aim_cfg=None):
     global _settings_hwnd, _window_open
     try:
         _trace("thread start")
         root = tk.Tk()
         _trace("root created")
         _settings_hwnd = root.winfo_id()
-        SettingsWindow(root, esp_cfg, colors_cfg, stealth_cfg, hud_cfg, games_cfg)
+        SettingsWindow(root, esp_cfg, colors_cfg, stealth_cfg, hud_cfg,
+                       games_cfg, aim_cfg)
         _trace("window built, entering mainloop")
         try:
             root.after_idle(lambda: _apply_icon(root))

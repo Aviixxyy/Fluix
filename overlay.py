@@ -1,3 +1,4 @@
+import math
 import ctypes
 from ctypes import wintypes as wt
 
@@ -119,6 +120,34 @@ user32.FrameRect.argtypes = [wt.HDC, ctypes.POINTER(wt.RECT), ctypes.c_void_p]
 user32.FrameRect.restype = ctypes.c_int
 user32.DrawTextW.argtypes = [wt.HDC, wt.LPCWSTR, ctypes.c_int, ctypes.POINTER(wt.RECT), wt.UINT]
 user32.DrawTextW.restype = ctypes.c_int
+
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+INPUT_MOUSE = 0
+
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wt.LONG),
+        ("dy", wt.LONG),
+        ("mouseData", wt.DWORD),
+        ("dwFlags", wt.DWORD),
+        ("time", wt.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wt.ULONG)),
+    ]
+
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [("mi", MOUSEINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wt.DWORD), ("u", INPUT_UNION)]
+
+
+user32.SendInput.argtypes = [wt.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+user32.SendInput.restype = wt.UINT
 
 WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM)
 
@@ -293,6 +322,13 @@ class Overlay:
         gdi32.LineTo(self.memdc, int(x2), int(y2))
         gdi32.SelectObject(self.memdc, old)
         gdi32.DeleteObject(pen)
+
+    def circle(self, cx, cy, r, color, segments=48):
+        for i in range(segments):
+            a1 = 2.0 * math.pi * i / segments
+            a2 = 2.0 * math.pi * (i + 1) / segments
+            self.line(cx + r * math.cos(a1), cy + r * math.sin(a1),
+                      cx + r * math.cos(a2), cy + r * math.sin(a2), color, 1)
 
     def text(self, x, y, value, color, center=False, size=None):
         if not value:

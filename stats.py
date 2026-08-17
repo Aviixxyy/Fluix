@@ -43,6 +43,8 @@ SAMPLES = 5
 SAMPLE_GAP = 0.15
 FRAME_DELTA_MAX = 32
 PING_MAX = 2500
+_MAX_FRAME_CANDS = 20000
+_MAX_PING_CANDS = 5000
 
 
 def _writable_regions(mem):
@@ -111,21 +113,27 @@ def _diff(prev_bufs, cur_bufs, frame_cands, ping_cands):
             va = np.frombuffer(a, np.int32, count=n)
             vb = np.frombuffer(b, np.int32, count=n)
             d = vb - va
-            idx = np.flatnonzero((d >= 0) & (d <= FRAME_DELTA_MAX))
-            for j in idx.tolist():
-                lst = fe.get(j)
-                if lst is None:
-                    lst = []
-                    fe[j] = lst
-                lst.append(int(d[j]))
-            idx = np.flatnonzero((va >= 1) & (va <= P) & (vb >= 1) &
-                                 (vb <= P) & (va != vb) & (np.abs(d) <= 60))
-            for j in idx.tolist():
-                rec = pe.get(j)
-                if rec is None:
-                    rec = {"jumps": [], "stable": 0}
-                    pe[j] = rec
-                rec["jumps"].append(int(d[j]))
+            if len(fe) < _MAX_FRAME_CANDS:
+                idx = np.flatnonzero((d > 0) & (d <= FRAME_DELTA_MAX))
+                for j in idx.tolist():
+                    if len(fe) >= _MAX_FRAME_CANDS:
+                        break
+                    lst = fe.get(j)
+                    if lst is None:
+                        lst = []
+                        fe[j] = lst
+                    lst.append(int(d[j]))
+            if len(pe) < _MAX_PING_CANDS:
+                idx = np.flatnonzero((va >= 1) & (va <= P) & (vb >= 1) &
+                                     (vb <= P) & (va != vb) & (np.abs(d) <= 60))
+                for j in idx.tolist():
+                    if len(pe) >= _MAX_PING_CANDS:
+                        break
+                    rec = pe.get(j)
+                    if rec is None:
+                        rec = {"jumps": [], "stable": 0}
+                        pe[j] = rec
+                    rec["jumps"].append(int(d[j]))
             if prev_tracked:
                 for j in prev_tracked:
                     if 1 <= int(va[j]) <= P and 1 <= int(vb[j]) <= P:
@@ -136,14 +144,14 @@ def _diff(prev_bufs, cur_bufs, frame_cands, ping_cands):
             for i, (pa, pb) in enumerate(zip(ia, ib)):
                 v1, v2 = pa[0], pb[0]
                 d = v2 - v1
-                if 0 <= d <= FRAME_DELTA_MAX:
+                if len(fe) < _MAX_FRAME_CANDS and 0 < d <= FRAME_DELTA_MAX:
                     lst = fe.get(i)
                     if lst is None:
                         lst = []
                         fe[i] = lst
                     lst.append(d)
-                if (1 <= v1 <= P and 1 <= v2 <= P and v1 != v2 and
-                        abs(d) <= 60):
+                if len(pe) < _MAX_PING_CANDS and (1 <= v1 <= P and 1 <= v2 <= P
+                        and v1 != v2 and abs(d) <= 60):
                     rec = pe.get(i)
                     if rec is None:
                         rec = {"jumps": [], "stable": 0}

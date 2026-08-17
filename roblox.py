@@ -182,7 +182,7 @@ def _camera_valid(right, up, back, fov):
         return False
     if abs(_vec_dot(right, back)) > 0.2:
         return False
-    if not (0.2 < fov < 2.6):
+    if not (0.03 < fov < 2.6):
         return False
     return True
 
@@ -334,7 +334,9 @@ def get_character_extents(mem, char, root_pos, offs):
 
     if max_y - min_y > 14.0:
         return None
-    return (min_y - root_y, max_y - root_y)
+    foot_off = max(-3.0, min_y - root_y)
+    head_off = min(6.5, max_y - root_y)
+    return (foot_off, head_off)
 
 
 def get_team_name(mem, player, offs):
@@ -449,6 +451,27 @@ def world_to_screen(world, cam, vw, vh):
     sx = vw / 2.0 + (cx / cz) * focal
     sy = vh / 2.0 - (cy / cz) * focal
     return (sx, sy)
+
+
+def project_vertical(cam, center_world, world_h, vw, vh):
+    """Project a world-space vertical segment of length ``world_h`` centred
+    on ``center_world``. Returns (sx, sy, screen_h) where ``screen_h`` depends
+    only on distance (not on camera pitch/roll), keeping ESP boxes a constant
+    size regardless of camera angle."""
+    if cam is None or center_world is None or vw <= 0 or vh <= 0:
+        return None
+    rx = center_world[0] - cam.pos[0]
+    ry = center_world[1] - cam.pos[1]
+    rz = center_world[2] - cam.pos[2]
+    cx = rx * cam.right[0] + ry * cam.right[1] + rz * cam.right[2]
+    cy = rx * cam.up[0] + ry * cam.up[1] + rz * cam.up[2]
+    cz = rx * cam.look[0] + ry * cam.look[1] + rz * cam.look[2]
+    if cz <= 0.1:
+        return None
+    focal = (vh / 2.0) / math.tan(cam.fov / 2.0)
+    sx = vw / 2.0 + (cx / cz) * focal
+    sy = vh / 2.0 - (cy / cz) * focal
+    return (sx, sy, max(0.0, focal * world_h / cz))
 
 
 def tracer_endpoint(world, cam, vw, vh):
