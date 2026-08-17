@@ -1465,7 +1465,6 @@ class SettingsWindow:
 
     def _add_reset_button(self, parent, key):
         row = tk.Frame(parent, bg=CARD)
-        row.pack(fill="x", padx=14, pady=(2, 12))
         btn = AccentButton(row, "RESET TO DEFAULTS",
                            command=lambda k=key: self._reset_tab(k),
                            filled=False, width=200, height=32)
@@ -1473,6 +1472,12 @@ class SettingsWindow:
         self._bind_tip((row, btn),
                        "Restores every setting on this tab to the built-in "
                        "defaults.")
+        if parent.grid_slaves():
+            r = parent.grid_size()[1]
+            row.grid(row=r, column=0, columnspan=2, sticky="w", padx=14,
+                     pady=(2, 12))
+        else:
+            row.pack(fill="x", padx=14, pady=(2, 12))
 
     def _reset_tab(self, key):
         if key in ("display", "distance"):
