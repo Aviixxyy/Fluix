@@ -94,6 +94,24 @@ def find_child_of_class(mem, inst, cls, offs):
     return 0
 
 
+def find_descendant_of_class(mem, inst, cls, offs, limit=2000):
+    """Depth-first search for any descendant of the given class, so nested
+    rigs (custom models) are still found even when the target isn't a direct
+    child."""
+    if not inst:
+        return 0
+    stack = [inst]
+    guard = 0
+    while stack and guard < limit:
+        guard += 1
+        node = stack.pop()
+        for child in get_children(mem, node, offs):
+            if class_name(mem, child, offs) == cls:
+                return child
+            stack.append(child)
+    return 0
+
+
 def get_datamodel(mem, offs):
     base = mem.base
     ptr_off = O(offs, "FakeDataModel", "Pointer")
@@ -261,18 +279,24 @@ def get_character(mem, player, offs):
         return char
     for child in get_children(mem, player, offs):
         if class_name(mem, child, offs) == "Model":
-            if find_child_of_class(mem, child, "Humanoid", offs):
+            if find_descendant_of_class(mem, child, "Humanoid", offs):
                 return child
+    for child in get_children(mem, player, offs):
+        if class_name(mem, child, offs) == "Folder":
+            found = find_descendant_of_class(mem, child, "Model", offs)
+            if found and find_descendant_of_class(mem, found, "Humanoid", offs):
+                return found
     return 0
 
 
 def get_humanoid(mem, char, offs):
-    return find_child_of_class(mem, char, "Humanoid", offs)
+    return find_descendant_of_class(mem, char, "Humanoid", offs)
 
 
 _PART_CLASSES = frozenset({
     "Part", "HumanoidRootPart", "BasePart", "MeshPart", "WedgePart",
-    "CylinderPart", "CornerWedgePart", "TrussPart",
+    "CylinderPart", "CornerWedgePart", "TrussPart", "Seat", "VehicleSeat",
+    "SpawnLocation", "UnionOperation", "NegateOperation",
 })
 
 
@@ -284,6 +308,9 @@ def get_root_part(mem, char, humanoid, offs):
     for child in get_children(mem, char, offs):
         if instance_name(mem, child, offs) == "HumanoidRootPart":
             return child
+    found = find_descendant_of_class(mem, char, "HumanoidRootPart", offs)
+    if found:
+        return found
     return 0
 
 
@@ -309,8 +336,8 @@ def get_character_extents(mem, char, root_pos, offs):
     if not char or not root_pos:
         return None
     root_y = root_pos[1]
-    band_bottom = root_y - 3.0
-    band_top = root_y + 12.0
+    band_bottom = root_y - 6.0
+    band_top = root_y + 20.0
     min_y = None
     max_y = None
     stack = [char]
@@ -332,11 +359,129 @@ def get_character_extents(mem, char, root_pos, offs):
     if min_y is None or max_y is None or not (max_y - min_y > 0.1):
         return None
 
-    if max_y - min_y > 14.0:
+    if max_y - min_y > 30.0:
         return None
-    foot_off = max(-3.0, min_y - root_y)
-    head_off = min(6.5, max_y - root_y)
+    foot_off = max(-8.0, min_y - root_y)
+    head_off = min(16.0, max_y - root_y)
     return (foot_off, head_off)
+
+
+def get_head_position(mem, char, offs, root_pos=None):
+    """Find the character's head point, or None if it can't be found.
+
+    Prefers a part literally named "Head", otherwise falls back to the
+    highest part within the extents band so custom rigs still get a
+    sensible aim point.
+    """
+    if not char:
+        return None
+    band_bottom = (root_pos[1] - 6.0) if root_pos else -1e18
+    band_top = (root_pos[1] + 20.0) if root_pos else 1e18
+    named = None
+    top = None
+    top_y = -1e18
+    stack = [char]
+    guard = 0
+    while stack and guard < 2000:
+        guard += 1
+        inst = stack.pop()
+        if class_name(mem, inst, offs) in _PART_CLASSES:
+            pos = get_part_position(mem, inst, offs)
+            if pos:
+                y = pos[1]
+                if root_pos and (y < band_bottom or y > band_top):
+                    stack.extend(get_children(mem, inst, offs))
+                    continue
+                if instance_name(mem, inst, offs) == "Head":
+                    named = pos
+                if y > top_y:
+                    top_y = y
+                    top = pos
+        stack.extend(get_children(mem, inst, offs))
+    return named if named is not None else top
+
+
+def get_workspace_players_folder(mem, ws, offs):
+    """Find the workspace Folder named 'Players' (Phantom Forces hides
+    character models there instead of parenting them to Player)."""
+    if not ws:
+        return 0
+    for child in get_children(mem, ws, offs):
+        if (class_name(mem, child, offs) == "Folder"
+                and instance_name(mem, child, offs) == "Players"):
+            return child
+    return 0
+
+
+def _alt_character_box(mem, model, offs):
+    """Compute (pos, extents, head) for a character model that carries no
+    Humanoid (Phantom Forces custom rigs) by scanning its parts."""
+    xs, ys, zs = [], [], []
+    stack = [model]
+    guard = 0
+    while stack and guard < 300:
+        guard += 1
+        inst = stack.pop()
+        if class_name(mem, inst, offs) in _PART_CLASSES:
+            p = get_part_position(mem, inst, offs)
+            if p:
+                xs.append(p[0])
+                ys.append(p[1])
+                zs.append(p[2])
+        stack.extend(get_children(mem, inst, offs))
+    if len(xs) < 6:
+        return None
+    min_y, max_y = min(ys), max(ys)
+    height = max_y - min_y
+    if not (1.0 <= height <= 30.0):
+        return None
+    cx = (min(xs) + max(xs)) * 0.5
+    cz = (min(zs) + max(zs)) * 0.5
+    pos = (cx, min_y + height * 0.45, cz)
+    head = (cx, max_y - 0.15, cz)
+    extents = (min_y - pos[1], max_y - pos[1])
+    return (pos, extents, head)
+
+
+def get_alt_characters(mem, ws, offs, limit=40):
+    """Phantom Forces-style characters: models under
+    Workspace/Folder:Players/<team folder>/<model>, obfuscated names and no
+    Humanoid. Returns a list of (model_addr, team_key, (pos, extents, head))."""
+    out = []
+    pf = get_workspace_players_folder(mem, ws, offs)
+    if not pf:
+        return out
+    for team in get_children(mem, pf, offs):
+        if class_name(mem, team, offs) != "Folder":
+            continue
+        team_key = instance_name(mem, team, offs) or ""
+        for model in get_children(mem, team, offs):
+            if class_name(mem, model, offs) != "Model":
+                continue
+            box = _alt_character_box(mem, model, offs)
+            if box:
+                out.append((model, team_key, box))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def get_local_character_alt(mem, ws, offs):
+    """Find the local player's character when it has been reparented under
+    Workspace/Folder:Ignore (Phantom Forces keeps the local Humanoid there
+    while remote characters lose theirs)."""
+    if not ws:
+        return 0
+    for child in get_children(mem, ws, offs):
+        if class_name(mem, child, offs) != "Folder":
+            continue
+        if instance_name(mem, child, offs) != "Ignore":
+            continue
+        for model in get_children(mem, child, offs):
+            if (class_name(mem, model, offs) == "Model"
+                    and find_descendant_of_class(mem, model, "Humanoid", offs)):
+                return model
+    return 0
 
 
 def get_team_name(mem, player, offs):

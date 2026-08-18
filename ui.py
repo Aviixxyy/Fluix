@@ -349,6 +349,8 @@ TOOLTIPS = {
     "humanize": "Varies the read rate randomly to look less robotic.",
     "occlusion": "Dims the box of players that are behind walls. Uses a "
                  "cached raycast against the map's parts.",
+    "debug": "Logs extra ESP diagnostics to the console: game id, workspace "
+             "layout and team samples. Turn this on when reporting a bug.",
     "aim_enabled": "Gently eases your crosshair onto the closest enemy. "
                    "Never writes game memory.",
     "aim_mode": "HOLD aims while you hold the key. ON FIRE aims while you "
@@ -902,7 +904,7 @@ class SettingsWindow:
     TABS = (("display", "DISPLAY"), ("distance", "DISTANCE"),
             ("colors", "COLORS"), ("rate", "READ RATE"), ("aim", "AIM"),
             ("themes", "THEMES"), ("hud", "HUD"), ("profiles", "CONFIGS"),
-            ("games", "GAMES"))
+            ("games", "GAMES"), ("misc", "MISC"))
 
     def __init__(self, root, esp_cfg, colors_cfg, stealth_cfg, hud_cfg=None,
                  games_cfg=None, aim_cfg=None):
@@ -1183,7 +1185,6 @@ class SettingsWindow:
                                        bg=BG, activebackground=CARD,
                                        troughcolor=BG, bd=0, width=10,
                                        relief="flat", highlightthickness=0)
-        self._scrollbar.pack(side="right", fill="y")
         self._scroll_canvas.configure(yscrollcommand=self._scrollbar.set)
         self._page_host = tk.Frame(self._scroll_canvas, bg=BG)
         self._host_item = self._scroll_canvas.create_window(
@@ -1206,6 +1207,7 @@ class SettingsWindow:
             ("hud", self._build_hud),
             ("profiles", self._build_profiles),
             ("games", self._build_games),
+            ("misc", self._build_misc),
         )
         for key, builder in builders:
             _trace("building page: " + key)
@@ -1483,6 +1485,8 @@ class SettingsWindow:
         if key in ("display", "distance"):
             self.esp.clear()
             self.esp.update(copy.deepcopy(config.ESP))
+        elif key == "misc":
+            self.esp["debug"] = bool(config.ESP.get("debug", False))
         elif key == "colors":
             self.colors.clear()
             self.colors.update(copy.deepcopy(config.COLORS))
@@ -1621,6 +1625,7 @@ class SettingsWindow:
             ("dead", "Dead / faded"),
             ("dead_tracer", "Dead tracer"),
             ("highlight", "Target highlight"),
+            ("occlusion", "Occlusion tint"),
             ("item", "Items"),
         ]
         for i, (key, label) in enumerate(rows):
@@ -2304,6 +2309,18 @@ class SettingsWindow:
         self._game_editor.pack(fill="x", pady=(4, 0))
         self._build_game_editor()
         self._add_reset_button(card.body, "games")
+
+    def _build_misc(self, parent):
+        card = Card(parent, "Misc")
+        self._stagger(card)
+        self._add_toggle(card.body, 0, 0, "debug", "Debug mode")
+        tk.Label(card.body,
+                 text="Logs detailed ESP diagnostics (game id, workspace "
+                      "layout, team samples) to the console while it runs.",
+                 bg=CARD, fg=MUTED, font=(FONT, 8), justify="left",
+                 wraplength=540).grid(row=1, column=0, columnspan=2,
+                                      sticky="w", padx=(36, 0), pady=(2, 0))
+        self._add_reset_button(card.body, "misc")
 
     def _on_preset_change(self, name):
         key = self._game_names.get(name)

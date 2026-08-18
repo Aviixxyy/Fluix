@@ -118,7 +118,7 @@ def _draw_corners(overlay, left, top, right, bottom, color, ratio=0.25, width=1)
         (left, bottom - length, left, bottom),
         (left, bottom, left + length, bottom),
         (right - length, bottom, right, bottom),
-        (right, bottom - length, right, bottom),
+        (right, bottom, right, bottom - length),
     ):
         overlay.line(x1, y1, x2, y2, color, width)
 
@@ -250,9 +250,16 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
                 name_color = colors["name_teammate"] if teammate else colors["name_enemy"]
                 use_corners = esp_cfg.get("box_corners", False)
 
+        occl = bool(esp_cfg.get("occlusion", False))
+        occ_tint = colors.get("occlusion", (139, 92, 246))
         if entry.get("occluded"):
-            box_color = _mix(box_color, colors["shadow"], 0.55)
-            name_color = _mix(name_color, colors["shadow"], 0.45)
+            tint = _mix(occ_tint, colors["shadow"], 0.35)
+            overlay.fill_rect(left, top, right, bottom, tint)
+            box_color = tint
+            name_color = tint
+        elif occl:
+            box_color = colors["box_enemy"]
+            name_color = colors["name_enemy"]
 
         if esp_cfg.get("box", True) and (rrole is None or rrole.get("box", True)):
             if use_corners:
@@ -419,8 +426,11 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
             else:
                 py = pos[1] + height * 0.5
         else:
-            if ext:
-                py = pos[1] + ext[1]
+            hp = e.get("head")
+            if hp:
+                py = hp[1]
+            elif ext:
+                py = pos[1] + (ext[0] + ext[1]) * 0.5
             else:
                 py = pos[1] + height - height * ratio
         wp = (pos[0], py, pos[2])

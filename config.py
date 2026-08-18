@@ -49,6 +49,7 @@ ESP = {
     "occlusion": False,
     "occ_scan_s": 4.0,
     "occ_rate": 0.12,
+    "debug": False,
 }
 
 
@@ -56,8 +57,15 @@ ESP = {
 
 
 GAMES = {
-    "murder_mystery_2": {
-        "name": "Murder Mystery 2",
+    "phantom_forces": {
+        "name": "Phantom Forces",
+        "enabled": True,
+        "place_id": "292439477",
+        "no_closest_highlight": False,
+        "alt_characters": True,
+        "roles": {},
+    },
+    "murder_mystery_2": {        "name": "Murder Mystery 2",
         "enabled": False,
         "place_id": "142823291",
         "no_closest_highlight": True,
@@ -113,6 +121,7 @@ COLORS = {
     "dead": (125, 125, 138),
     "dead_tracer": (80, 80, 94),
     "highlight": (139, 92, 246),
+    "occlusion": (139, 92, 246),
     "item": (0, 200, 255),
 }
 
@@ -178,7 +187,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "1.0.13"
+APP_VERSION = "1.0.14"
 
 
 

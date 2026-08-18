@@ -54,6 +54,7 @@ class EspReader(threading.Thread):
         self._stop = False
         self._dm = 0
         self._extents = {}
+        self._heads = {}
         self._tool_cache = {}
         self._role_cache = {}
         self._warned_no_team = False
@@ -215,6 +216,8 @@ class EspReader(threading.Thread):
         elif not no_team_data and self._warned_no_team:
             self._warned_no_team = False
         local_char = roblox.get_character(mem, local, offs) if local else 0
+        if not local_char:
+            local_char = roblox.get_local_character_alt(mem, ws, offs)
         local_humanoid = roblox.get_humanoid(mem, local_char, offs) if local_char else 0
         local_hrp = roblox.get_root_part(mem, local_char, local_humanoid, offs) if local_char else 0
         local_pos = roblox.get_part_position(mem, local_hrp, offs) if local_hrp else None
@@ -228,20 +231,33 @@ class EspReader(threading.Thread):
             self._last_camera = camera
 
         entries = []
+        seen = 0
+        no_char = 0
+        no_humanoid = 0
+        no_hrp = 0
+        no_pos = 0
+        skipped_team = 0
+        skipped_dist = 0
+        skipped_dead = 0
         for p in roblox.get_children(mem, players, offs):
             if roblox.class_name(mem, p, offs) != "Player":
                 continue
+            seen += 1
             char = roblox.get_character(mem, p, offs)
             if not char:
+                no_char += 1
                 continue
             humanoid = roblox.get_humanoid(mem, char, offs)
             if not humanoid:
+                no_humanoid += 1
                 continue
             hrp = roblox.get_root_part(mem, char, humanoid, offs)
             pos = roblox.get_part_position(mem, hrp, offs) if hrp else None
             if not pos:
+                no_pos += 1
                 continue
             extents = None
+            head_pos = None
             if esp.get("dynamic_box", True):
                 refresh_s = float(esp.get("extents_refresh_s", 1.5))
                 last_scan, cached = self._extents.get(char, (0.0, None))
@@ -252,6 +268,14 @@ class EspReader(threading.Thread):
                     self._extents[char] = (now, extents)
                     if len(self._extents) > 256:
                         self._extents.clear()
+                last_head, cached_head = self._heads.get(char, (0.0, None))
+                if cached_head and now - last_head < refresh_s:
+                    head_pos = cached_head
+                else:
+                    head_pos = roblox.get_head_position(mem, char, offs, pos)
+                    self._heads[char] = (now, head_pos)
+                    if len(self._heads) > 256:
+                        self._heads.clear()
             name = roblox.instance_name(mem, p, offs) or "?"
             team = roblox.get_team_name(mem, p, offs)
             is_local = bool(local and p == local)
@@ -265,8 +289,10 @@ class EspReader(threading.Thread):
             if not esp.get("show_local_player", False) and is_local:
                 continue
             if esp.get("team_check", True) and not is_local and local_team and team == local_team:
+                skipped_team += 1
                 continue
             if distance is not None and distance > esp.get("max_distance", 300.0):
+                skipped_dist += 1
                 continue
 
             health = mem.f32(humanoid + roblox.O(offs, "Humanoid", "Health"))
@@ -274,6 +300,7 @@ class EspReader(threading.Thread):
             if max_health <= 0:
                 max_health = 100.0
             if esp.get("skip_dead", False) and health <= 0:
+                skipped_dead += 1
                 continue
 
             tool = ""
@@ -309,10 +336,103 @@ class EspReader(threading.Thread):
                 "is_local": is_local,
                 "alive": health > 0,
                 "extents": extents,
+                "head": head_pos,
                 "tool": tool,
                 "role": role,
                 "occluded": False,
             })
+
+        alt_count = 0
+        if not entries and (game_cfg is None or game_cfg.get("alt_characters", False)):
+            alt_models = []
+            for model, team_key, box in roblox.get_alt_characters(mem, ws, offs):
+                alt_models.append((model, team_key, box))
+            alt_local_key = ""
+            alt_local_model = 0
+            if local_pos:
+                best_d2 = 3.0 * 3.0
+                for model, team_key, box in alt_models:
+                    pos, _, _ = box
+                    if not pos:
+                        continue
+                    dx = pos[0] - local_pos[0]
+                    dy = pos[1] - local_pos[1]
+                    dz = pos[2] - local_pos[2]
+                    d2 = dx * dx + dy * dy + dz * dz
+                    if d2 < best_d2:
+                        best_d2 = d2
+                        alt_local_key = team_key
+                        alt_local_model = model
+            if alt_local_key:
+                local_team = alt_local_key
+            for model, team_key, box in alt_models:
+                alt_count += 1
+                pos, extents, head = box
+                is_local = bool(alt_local_model and model == alt_local_model)
+                if not esp.get("show_local_player", False) and is_local:
+                    continue
+                if esp.get("team_check", True) and not is_local and \
+                        alt_local_key and team_key == alt_local_key:
+                    skipped_team += 1
+                    continue
+                distance = None
+                if local_pos and pos:
+                    dx = pos[0] - local_pos[0]
+                    dz = pos[2] - local_pos[2]
+                    distance = math.sqrt(dx * dx + dz * dz)
+                if distance is not None and distance > esp.get("max_distance", 300.0):
+                    skipped_dist += 1
+                    continue
+                entries.append({
+                    "name": "",
+                    "team": team_key,
+                    "health": 100.0,
+                    "max_health": 100.0,
+                    "pos": pos,
+                    "distance": distance,
+                    "is_local": is_local,
+                    "alive": True,
+                    "extents": extents,
+                    "head": head,
+                    "tool": "",
+                    "role": None,
+                    "occluded": False,
+                })
+
+        if esp.get("debug", False) and update % 300 == 0:
+            game_name = self._game_names.get(game_id) or ""
+            status.log("[ESP-dbg] game_id={} game={!r}".format(
+                game_id, game_name))
+            lp = roblox.get_local_player(mem, players, offs)
+            team_info = []
+            for p in (roblox.get_children(mem, players, offs) or [])[:3]:
+                team = mem.ptr(p + roblox.O(offs, "Player", "Team"))
+                team_info.append("0x{:X}:{}:{}".format(
+                    team or 0,
+                    roblox.class_name(mem, team, offs) if team else "-",
+                    roblox.instance_name(mem, team, offs) if team else "-"))
+            status.log("[ESP-dbg] teams sample={} local_pos={}".format(
+                team_info, local_pos))
+            ws_children = ["{}:{}".format(
+                roblox.class_name(mem, k, offs),
+                roblox.instance_name(mem, k, offs))
+                for k in roblox.get_children(mem, ws, offs)]
+            status.log("[ESP-dbg] workspace kids={}".format(ws_children))
+            for sub in roblox.get_children(mem, ws, offs):
+                sub_cls = roblox.class_name(mem, sub, offs)
+                sub_nm = roblox.instance_name(mem, sub, offs)
+                if sub_cls not in ("Folder", "Model") or sub_nm == "Map":
+                    continue
+                kids = []
+                for k in roblox.get_children(mem, sub, offs):
+                    kids.append("{}:{}".format(
+                        roblox.class_name(mem, k, offs),
+                        roblox.instance_name(mem, k, offs)))
+                status.log("[ESP-dbg] {}:{} all {} direct kids: {}".format(
+                    sub_cls, sub_nm, len(kids), kids))
+                if sub_nm == "Players":
+                    for k in roblox.get_children(mem, sub, offs):
+                        self._dump_character(status, mem, k, offs, 0)
 
         items = []
         if esp.get("item_esp", True) and local_pos:
@@ -353,6 +473,72 @@ class EspReader(threading.Thread):
         self._push_status(camera=camera, targets=len(entries), game=game_key,
                           game_name=game_name, game_id=game_id)
 
+    def _dump_character(self, logger, mem, node, offs, depth):
+        line = []
+        cur = node
+        for _ in range(10):
+            if not cur:
+                break
+            cls = roblox.class_name(mem, cur, offs)
+            nm = roblox.instance_name(mem, cur, offs)
+            line.insert(0, "{}:{}".format(cls, nm))
+            cur = mem.ptr(cur + roblox.O(offs, "Instance", "Parent"))
+        found = []
+        stack = [node]
+        guard = 0
+        while stack and guard < 5000:
+            guard += 1
+            n = stack.pop()
+            for k in roblox.get_children(mem, n, offs):
+                cls = roblox.class_name(mem, k, offs)
+                if cls in ("Part", "MeshPart", "WedgePart", "CylinderPart",
+                           "TrussPart", "CornerWedgePart"):
+                    pos = roblox.get_part_position(mem, k, offs)
+                    if pos:
+                        found.append(pos)
+                if cls in ("Part", "MeshPart", "WedgePart", "CylinderPart",
+                           "TrussPart", "CornerWedgePart", "Texture", "Decal",
+                           "Humanoid"):
+                    continue
+                stack.append(k)
+        if not found:
+            logger.log("[ESP-dbg] {} no parts, chain={}".format(
+                "  " * depth, " <- ".join(line)))
+            return
+        ys = [p[1] for p in found]
+        xs = [p[0] for p in found]
+        zs = [p[2] for p in found]
+        logger.log("[ESP-dbg] {} chain={} parts={} pos=({:.0f},{:.0f},{:.0f}) "
+                   "y=[{:.0f},{:.0f}]".format(
+                       "  " * depth, " <- ".join(line), len(found),
+                       sum(xs) / len(xs), sum(ys) / len(ys),
+                       sum(zs) / len(zs), min(ys), max(ys)))
+
+    def _dump_subtree(self, logger, mem, node, offs, depth, max_depth):
+        line = []
+        cur = node
+        for _ in range(10):
+            if not cur:
+                break
+            cls = roblox.class_name(mem, cur, offs)
+            nm = roblox.instance_name(mem, cur, offs)
+            line.insert(0, "{}:{}".format(cls, nm))
+            cur = mem.ptr(cur + roblox.O(offs, "Instance", "Parent"))
+        kids = []
+        for k in roblox.get_children(mem, node, offs):
+            kids.append("{}:{}".format(
+                roblox.class_name(mem, k, offs),
+                roblox.instance_name(mem, k, offs)))
+        logger.log("[ESP-dbg] {}{} chain={} kids[{}]={}".format(
+            "  " * depth, "node", " <- ".join(line), len(kids), kids[:12]))
+        if depth < max_depth:
+            for k in roblox.get_children(mem, node, offs):
+                cls = roblox.class_name(mem, k, offs)
+                if cls in ("Folder", "Model", "Workspace", "Players",
+                           "Player", "DataModel"):
+                    self._dump_subtree(logger, mem, k, offs, depth + 1,
+                                       max_depth)
+
     def _lookup_game_name(self, place_id):
         try:
             import json
@@ -391,8 +577,11 @@ class EspReader(threading.Thread):
                 continue
             pos = e["pos"]
             ext = e.get("extents")
-            if ext:
-                py = pos[1] + ext[1]
+            hp = e.get("head")
+            if hp:
+                py = hp[1]
+            elif ext:
+                py = pos[1] + (ext[0] + ext[1]) * 0.5
             else:
                 py = pos[1] + height - height * ratio
             points.append((pos[0], py, pos[2]))
