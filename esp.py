@@ -404,6 +404,17 @@ class EspReader(threading.Thread):
             status.log("[ESP-dbg] game_id={} game={!r}".format(
                 game_id, game_name))
             lp = roblox.get_local_player(mem, players, offs)
+            camdbg = roblox.read_camera(mem, cam, offs,
+                                        anchor=local_anchor) if cam else None
+            if camdbg:
+                status.log("[ESP-dbg] camera pos=({:.1f},{:.1f},{:.1f}) "
+                           "look=({:.2f},{:.2f},{:.2f}) fov={:.2f}".format(
+                    camdbg.pos[0], camdbg.pos[1], camdbg.pos[2],
+                    camdbg.look[0], camdbg.look[1], camdbg.look[2],
+                    math.degrees(camdbg.fov)))
+            else:
+                status.log("[ESP-dbg] camera read FAILED (falling back to "
+                           "last good camera)")
             team_info = []
             for p in (roblox.get_children(mem, players, offs) or [])[:3]:
                 team = mem.ptr(p + roblox.O(offs, "Player", "Team"))

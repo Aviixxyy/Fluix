@@ -864,6 +864,8 @@ def main():
     last_frame = time.monotonic()
     stats_started = False
     stats_ready_at = 0.0
+    cam_fail = 0
+    cam_fail_logged = 0.0
 
     def _stats_done():
         if stats_finder.state == "done":
@@ -954,6 +956,13 @@ def main():
             if fresh:
                 snap = dict(snap)
                 snap["camera"] = fresh
+                cam_fail = 0
+            else:
+                cam_fail += 1
+                if cam_fail == 30 and time.monotonic() - cam_fail_logged > 5.0:
+                    cam_fail_logged = time.monotonic()
+                    status.log("[i] camera read failing ({}/frame) - "
+                               "using last good camera".format(cam_fail))
         fps_frames += 1
         if frame_now - fps_t0 >= 1.0:
             hud_state["fps"] = fps_frames / (frame_now - fps_t0)
