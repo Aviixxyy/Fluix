@@ -233,19 +233,15 @@ def read_camera(mem, cam, offs, anchor=None):
     stored = mem.vec3(cam + (O(offs, "Camera", "Position") or 0xFC))
     pos = stored
     if anchor and pos:
-
-
-
-
         d = float(config.ESP.get("camera_distance", 8.0))
         rx = anchor[0] - pos[0]
         ry = anchor[1] - pos[1]
         rz = anchor[2] - pos[2]
         L = math.sqrt(rx * rx + ry * ry + rz * rz)
-        if L < 0.1 or L > 300.0:
-            pos = (anchor[0] - back[0] * d,
-                   anchor[1] - back[1] * d,
-                   anchor[2] - back[2] * d)
+        if L > 300.0:
+            pos = (anchor[0] + back[0] * d,
+                   anchor[1] + back[1] * d,
+                   anchor[2] + back[2] * d)
     if not pos:
         return None
     viewport = mem.floats(cam + 712, 2) if mem else None

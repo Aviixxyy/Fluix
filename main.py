@@ -185,17 +185,6 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
             head_y = pos[1] + head_off
         world_h = max(0.1, head_y - foot_y)
         mid = (pos[0], (foot_y + head_y) * 0.5, pos[2])
-        pr = roblox.project_vertical(cam, mid, world_h, vw, vh)
-        if not pr:
-            continue
-        px, mid_y, box_h = pr
-        if box_h < esp_cfg.get("min_box_height", 4.0):
-            continue
-        box_w = box_h * esp_cfg.get("box_width_ratio", 0.5)
-        top = mid_y - box_h * 0.5
-        bottom = mid_y + box_h * 0.5
-        left = px - box_w * 0.5
-        right = px + box_w * 0.5
         dead = bool(entry.get("health", 1.0) <= 0.0)
         fade = bool(esp_cfg.get("fade_dead", True)) and dead
         teammate = bool(local_team and entry.get("team") == local_team)
@@ -227,6 +216,18 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
                     overlay.line(vw / 2.0, vh / 2.0, te[0], te[1], tracer_color,
                                  2 if is_tgt else 1)
 
+        pr = roblox.project_vertical(cam, mid, world_h, vw, vh)
+        if not pr:
+            continue
+        px, mid_y, box_h = pr
+        if box_h < esp_cfg.get("min_box_height", 4.0):
+            continue
+        box_w = box_h * esp_cfg.get("box_width_ratio", 0.5)
+        top = mid_y - box_h * 0.5
+        bottom = mid_y + box_h * 0.5
+        left = px - box_w * 0.5
+        right = px + box_w * 0.5
+
         is_target = bool(target is not None and entry is target)
         if fade:
             scale = max(0.2, min(1.0, float(esp_cfg.get("dead_box_scale", 0.5))))
@@ -251,12 +252,9 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
                 use_corners = esp_cfg.get("box_corners", False)
 
         occl = bool(esp_cfg.get("occlusion", False))
-        occ_tint = colors.get("occlusion", (139, 92, 246))
         if entry.get("occluded"):
-            tint = _mix(occ_tint, colors["shadow"], 0.35)
-            overlay.fill_rect(left, top, right, bottom, tint)
-            box_color = tint
-            name_color = tint
+            box_color = _mix(box_color, (220, 220, 220), 0.45)
+            name_color = _mix(name_color, (220, 220, 220), 0.45)
         elif occl:
             box_color = colors["box_enemy"]
             name_color = colors["name_enemy"]
