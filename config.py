@@ -63,6 +63,7 @@ GAMES = {
         "place_id": "292439477",
         "no_closest_highlight": False,
         "alt_characters": True,
+        "team_color_teams": True,
         "roles": {},
     },
     "murder_mystery_2": {        "name": "Murder Mystery 2",
@@ -187,7 +188,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "1.0.16"
+APP_VERSION = "1.0.17"
 
 
 

@@ -64,6 +64,12 @@ class EspReader(threading.Thread):
         self._hz_cur = None
         self._hz_burst = 0
         self._game_name_lookups = {}
+        self._alt_cache = (0.0, [])
+        self._dead_cache = (0.0, [])
+        self._color_cache = (0.0, None)
+        self._last_local_team = ""
+        self._scan_busy = False
+        self._last_scan = 0.0
         self.snapshot = {
             "camera": None,
             "local_pos": None,
@@ -207,7 +213,12 @@ class EspReader(threading.Thread):
             server_count = 0
 
         local = roblox.get_local_player(mem, players, offs)
-        local_team = roblox.get_team_name(mem, local, offs) if local else ""
+        team_color_teams = bool(game_cfg and game_cfg.get("team_color_teams"))
+        if team_color_teams:
+            tc = roblox.get_team_color(mem, local, offs) if local else 0
+            local_team = "tc:{}".format(tc) if tc else ""
+        else:
+            local_team = roblox.get_team_name(mem, local, offs) if local else ""
         no_team_data = bool(esp.get("team_check", True) and not local_team)
         if no_team_data and not self._warned_no_team:
             self._warned_no_team = True
@@ -277,7 +288,11 @@ class EspReader(threading.Thread):
                     if len(self._heads) > 256:
                         self._heads.clear()
             name = roblox.instance_name(mem, p, offs) or "?"
-            team = roblox.get_team_name(mem, p, offs)
+            if team_color_teams:
+                tc = roblox.get_team_color(mem, p, offs)
+                team = "tc:{}".format(tc) if tc else ""
+            else:
+                team = roblox.get_team_name(mem, p, offs)
             is_local = bool(local and p == local)
 
             distance = None
@@ -344,9 +359,19 @@ class EspReader(threading.Thread):
 
         alt_count = 0
         if not entries and (game_cfg is None or game_cfg.get("alt_characters", False)):
+            alt_ts, alt_cached = self._alt_cache
             alt_models = []
-            for model, team_key, box in roblox.get_alt_characters(mem, ws, offs):
-                alt_models.append((model, team_key, box))
+            for model, team_key, box in alt_cached:
+                pos, extents, head, anchor, apos = box
+                if anchor and apos:
+                    ap = roblox.get_part_position(mem, anchor, offs)
+                    if ap:
+                        dx = ap[0] - apos[0]
+                        dy = ap[1] - apos[1]
+                        dz = ap[2] - apos[2]
+                        pos = (pos[0] + dx, pos[1] + dy, pos[2] + dz)
+                        head = (head[0] + dx, head[1] + dy, head[2] + dz)
+                alt_models.append((model, team_key, (pos, extents, head)))
             alt_local_key = ""
             alt_local_model = 0
             if local_pos:
@@ -365,6 +390,30 @@ class EspReader(threading.Thread):
                         alt_local_model = model
             if alt_local_key:
                 local_team = alt_local_key
+            elif team_color_teams:
+                color_ts, color_cached = self._color_cache
+                if color_cached:
+                    folder_cols, local_col = color_cached
+                    best_key = ""
+                    best_d = None
+                    if local_col:
+                        for tk, col in folder_cols.items():
+                            if not col:
+                                continue
+                            d = math.sqrt((col[0] - local_col[0]) ** 2 +
+                                          (col[1] - local_col[1]) ** 2 +
+                                          (col[2] - local_col[2]) ** 2)
+                            if best_d is None or d < best_d:
+                                best_d = d
+                                best_key = tk
+                        if best_key and best_d is not None and best_d < 0.35:
+                            alt_local_key = best_key
+            if alt_local_key:
+                local_team = alt_local_key
+            if local_team:
+                self._last_local_team = local_team
+            else:
+                local_team = self._last_local_team
             for model, team_key, box in alt_models:
                 alt_count += 1
                 pos, extents, head = box
@@ -372,7 +421,7 @@ class EspReader(threading.Thread):
                 if not esp.get("show_local_player", False) and is_local:
                     continue
                 if esp.get("team_check", True) and not is_local and \
-                        alt_local_key and team_key == alt_local_key:
+                        local_team and team_key == local_team:
                     skipped_team += 1
                     continue
                 distance = None
@@ -399,6 +448,42 @@ class EspReader(threading.Thread):
                     "occluded": False,
                 })
 
+            if not esp.get("skip_dead", False) and \
+                    (game_cfg is None or game_cfg.get("alt_characters", False)):
+                dead_ts, dead_cached = self._dead_cache
+                for model, box in dead_cached:
+                    pos, extents, head, anchor, apos = box
+                    if anchor and apos:
+                        ap = roblox.get_part_position(mem, anchor, offs)
+                        if ap:
+                            dx = ap[0] - apos[0]
+                            dy = ap[1] - apos[1]
+                            dz = ap[2] - apos[2]
+                            pos = (pos[0] + dx, pos[1] + dy, pos[2] + dz)
+                            head = (head[0] + dx, head[1] + dy, head[2] + dz)
+                    distance = None
+                    if local_pos and pos:
+                        dx = pos[0] - local_pos[0]
+                        dz = pos[2] - local_pos[2]
+                        distance = math.sqrt(dx * dx + dz * dz)
+                    if distance is not None and distance > esp.get("max_distance", 300.0):
+                        continue
+                    entries.append({
+                        "name": "",
+                        "team": "",
+                        "health": 0.0,
+                        "max_health": 100.0,
+                        "pos": pos,
+                        "distance": distance,
+                        "is_local": False,
+                        "alive": False,
+                        "extents": extents,
+                        "head": head,
+                        "tool": "",
+                        "role": None,
+                        "occluded": False,
+                    })
+
         if esp.get("debug", False) and update % 300 == 0:
             game_name = self._game_names.get(game_id) or ""
             status.log("[ESP-dbg] game_id={} game={!r}".format(
@@ -418,12 +503,38 @@ class EspReader(threading.Thread):
             team_info = []
             for p in (roblox.get_children(mem, players, offs) or [])[:3]:
                 team = mem.ptr(p + roblox.O(offs, "Player", "Team"))
-                team_info.append("0x{:X}:{}:{}".format(
+                tc_off = roblox.O(offs, "Player", "TeamColor") or 944
+                tc = mem.u32(p + tc_off) if tc_off else 0
+                kids = []
+                for k in roblox.get_children(mem, p, offs) or []:
+                    kc = roblox.class_name(mem, k, offs)
+                    kn = roblox.instance_name(mem, k, offs)
+                    if kc.endswith("Value"):
+                        voff = roblox.O(offs, "Misc", "Value") or 184
+                        vraw = mem.u32(k + voff) if voff else 0
+                        vstr = ""
+                        if kc == "StringValue":
+                            vstr = mem.rbx_string(vraw) if vraw else ""
+                        kids.append("{}:{}={}/{}".format(
+                            kc, kn, vraw, vstr))
+                    else:
+                        kids.append("{}:{}".format(kc, kn))
+                team_info.append("0x{:X}:{}:{} tc={} kids={}".format(
                     team or 0,
                     roblox.class_name(mem, team, offs) if team else "-",
-                    roblox.instance_name(mem, team, offs) if team else "-"))
+                    roblox.instance_name(mem, team, offs) if team else "-",
+                    tc, kids[:14]))
             status.log("[ESP-dbg] teams sample={} local_pos={}".format(
                 team_info, local_pos))
+            status.log("[ESP-dbg] skip stats seen={} no_char={} "
+                       "no_humanoid={} no_hrp={} no_pos={} team_skip={} "
+                       "dist_skip={} dead_skip={} entries={} "
+                       "server_players={}".format(
+                seen, no_char, no_humanoid, no_hrp, no_pos,
+                skipped_team, skipped_dist, skipped_dead, len(entries),
+                server_count))
+            status.log("[ESP-dbg] local_team={!r} alt={} tc_mode={}".format(
+                local_team, alt_count, team_color_teams))
             ws_children = ["{}:{}".format(
                 roblox.class_name(mem, k, offs),
                 roblox.instance_name(mem, k, offs))
@@ -483,6 +594,43 @@ class EspReader(threading.Thread):
                       cam_addr=cam, local_anchor=local_anchor)
         self._push_status(camera=camera, targets=len(entries), game=game_key,
                           game_name=game_name, game_id=game_id)
+
+        scan_gap = float(esp.get("extents_refresh_s", 1.5))
+        if (game_cfg is None or game_cfg.get("alt_characters", False)) and \
+                now - self._last_scan >= scan_gap and not self._scan_busy:
+            self._last_scan = now
+            self._scan_busy = True
+            threading.Thread(target=self._refresh_alt_caches,
+                             args=(now, ws, mem, offs, esp, game_cfg),
+                             daemon=True, name="AltScan").start()
+
+    def _refresh_alt_caches(self, now, ws, mem, offs, esp, game_cfg):
+        try:
+            alt_models = []
+            for model, team_key, box in roblox.get_alt_characters(
+                    mem, ws, offs):
+                alt_models.append((model, team_key, box))
+            self._alt_cache = (now, alt_models)
+            if game_cfg and game_cfg.get("team_color_teams"):
+                local_char = roblox.get_local_character_alt(mem, ws, offs)
+                local_col = None
+                if local_char:
+                    local_col = roblox.dominant_part_color(mem, local_char,
+                                                           offs)
+                folder_cols = {}
+                for model, team_key, box in alt_models:
+                    if team_key not in folder_cols:
+                        folder_cols[team_key] = roblox.dominant_part_color(
+                            mem, model, offs)
+                self._color_cache = (now, (folder_cols, local_col))
+            if not esp.get("skip_dead", False):
+                self._dead_cache = (now, list(
+                    roblox.get_dead_characters(mem, ws, offs)))
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        finally:
+            self._scan_busy = False
 
     def _dump_character(self, logger, mem, node, offs, depth):
         line = []

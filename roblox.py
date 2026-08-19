@@ -410,9 +410,13 @@ def get_workspace_players_folder(mem, ws, offs):
 
 
 def _alt_character_box(mem, model, offs):
-    """Compute (pos, extents, head) for a character model that carries no
-    Humanoid (Phantom Forces custom rigs) by scanning its parts."""
+    """Compute (pos, extents, head, anchor_addr, anchor_pos) for a character
+    model that carries no Humanoid (Phantom Forces custom rigs) by scanning
+    its parts. ``anchor_addr``/``anchor_pos`` identify the part closest to
+    the box centre so callers can re-track the rig cheaply between full
+    scans by re-reading a single part position."""
     xs, ys, zs = [], [], []
+    parts = []
     stack = [model]
     guard = 0
     while stack and guard < 300:
@@ -424,6 +428,7 @@ def _alt_character_box(mem, model, offs):
                 xs.append(p[0])
                 ys.append(p[1])
                 zs.append(p[2])
+                parts.append((inst, p))
         stack.extend(get_children(mem, inst, offs))
     if len(xs) < 6:
         return None
@@ -433,10 +438,20 @@ def _alt_character_box(mem, model, offs):
         return None
     cx = (min(xs) + max(xs)) * 0.5
     cz = (min(zs) + max(zs)) * 0.5
-    pos = (cx, min_y + height * 0.45, cz)
+    mid_y = min_y + height * 0.45
+    pos = (cx, mid_y, cz)
     head = (cx, max_y - 0.15, cz)
     extents = (min_y - pos[1], max_y - pos[1])
-    return (pos, extents, head)
+    anchor = 0
+    anchor_pos = None
+    best = None
+    for inst, p in parts:
+        d2 = (p[0] - cx) ** 2 + (p[1] - mid_y) ** 2 + (p[2] - cz) ** 2
+        if best is None or d2 < best:
+            best = d2
+            anchor = inst
+            anchor_pos = p
+    return (pos, extents, head, anchor, anchor_pos)
 
 
 def get_alt_characters(mem, ws, offs, limit=40):
@@ -457,6 +472,61 @@ def get_alt_characters(mem, ws, offs, limit=40):
             box = _alt_character_box(mem, model, offs)
             if box:
                 out.append((model, team_key, box))
+                if len(out) >= limit:
+                    return out
+    return out
+
+
+def dominant_part_color(mem, model, offs):
+    """Most common part Color3 across a rig, as (r, g, b) floats in 0-1.
+
+    Phantom Forces teams wear distinct uniform colours, so this is used
+    to match the local rig (client-side only, in Folder:Ignore) to its
+    team folder under Folder:Players.
+    """
+    counts = {}
+    stack = [model]
+    guard = 0
+    col_off = O(offs, "BasePart", "Color3")
+    while stack and guard < 2000:
+        guard += 1
+        inst = stack.pop()
+        if class_name(mem, inst, offs) in _PART_CLASSES and col_off:
+            r = mem.f32(inst + col_off)
+            g = mem.f32(inst + col_off + 4)
+            b = mem.f32(inst + col_off + 8)
+            if r >= 0.0 and g >= 0.0 and b >= 0.0:
+                key = (int(r * 50), int(g * 50), int(b * 50))
+                counts[key] = counts.get(key, 0) + 1
+        stack.extend(get_children(mem, inst, offs))
+    if not counts:
+        return None
+    best = max(counts, key=counts.get)
+    return (best[0] / 50.0, best[1] / 50.0, best[2] / 50.0)
+
+
+def get_dead_characters(mem, ws, offs, limit=40):
+    out = []
+    if not ws:
+        return out
+    ignore = 0
+    for child in get_children(mem, ws, offs):
+        if (class_name(mem, child, offs) == "Folder"
+                and instance_name(mem, child, offs) == "Ignore"):
+            ignore = child
+            break
+    if not ignore:
+        return out
+    for child in get_children(mem, ignore, offs):
+        if (class_name(mem, child, offs) != "Folder"
+                or instance_name(mem, child, offs) != "DeadBody"):
+            continue
+        for model in get_children(mem, child, offs):
+            if class_name(mem, model, offs) != "Model":
+                continue
+            box = _alt_character_box(mem, model, offs)
+            if box:
+                out.append((model, box))
                 if len(out) >= limit:
                     return out
     return out
@@ -487,6 +557,20 @@ def get_team_name(mem, player, offs):
     if not team:
         return ""
     return instance_name(mem, team, offs)
+
+
+def get_team_color(mem, player, offs):
+    """Return the player's TeamColor BrickColor id (0 if unset).
+
+    Phantom Forces leaves Player.Team nil but sets TeamColor, so teams
+    can be compared by this id when the preset opts in via team_color_teams.
+    """
+    if not player:
+        return 0
+    tc = O(offs, "Player", "TeamColor")
+    if not tc:
+        return 0
+    return mem.u32(player + tc)
 
 
 def get_equipped_tool(mem, char, offs):
