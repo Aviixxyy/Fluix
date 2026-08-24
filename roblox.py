@@ -409,7 +409,7 @@ def get_workspace_players_folder(mem, ws, offs):
     return 0
 
 
-def _alt_character_box(mem, model, offs):
+def _alt_character_box(mem, model, offs, min_height=3.0, rej=None):
     """Compute (pos, extents, head, anchor_addr, anchor_pos) for a character
     model that carries no Humanoid (Phantom Forces custom rigs) by scanning
     its parts. ``anchor_addr``/``anchor_pos`` identify the part closest to
@@ -430,11 +430,25 @@ def _alt_character_box(mem, model, offs):
                 zs.append(p[2])
                 parts.append((inst, p))
         stack.extend(get_children(mem, inst, offs))
-    if len(xs) < 6:
+    if len(xs) < 3:
+        if rej is not None:
+            rej["parts<4"] = rej.get("parts<4", 0) + 1
         return None
     min_y, max_y = min(ys), max(ys)
     height = max_y - min_y
     if not (1.0 <= height <= 30.0):
+        if rej is not None:
+            rej["height"] = rej.get("height", 0) + 1
+        return None
+    xw = max(xs) - min(xs)
+    zw = max(zs) - min(zs)
+    if xw > 8.0 or zw > 8.0:
+        if rej is not None:
+            rej["width"] = rej.get("width", 0) + 1
+        return None
+    if xw < 1.0 or zw < 1.0:
+        if rej is not None:
+            rej["thin"] = rej.get("thin", 0) + 1
         return None
     cx = (min(xs) + max(xs)) * 0.5
     cz = (min(zs) + max(zs)) * 0.5
@@ -451,16 +465,18 @@ def _alt_character_box(mem, model, offs):
             best = d2
             anchor = inst
             anchor_pos = p
-    return (pos, extents, head, anchor, anchor_pos)
+    return (pos, extents, head, anchor, anchor_pos, len(parts))
 
 
-def get_alt_characters(mem, ws, offs, limit=40):
+def get_alt_characters(mem, ws, offs, limit=40, rej=None):
     """Phantom Forces-style characters: models under
     Workspace/Folder:Players/<team folder>/<model>, obfuscated names and no
     Humanoid. Returns a list of (model_addr, team_key, (pos, extents, head))."""
     out = []
     pf = get_workspace_players_folder(mem, ws, offs)
     if not pf:
+        if rej is not None:
+            rej["no_folder"] = rej.get("no_folder", 0) + 1
         return out
     for team in get_children(mem, pf, offs):
         if class_name(mem, team, offs) != "Folder":
@@ -469,9 +485,9 @@ def get_alt_characters(mem, ws, offs, limit=40):
         for model in get_children(mem, team, offs):
             if class_name(mem, model, offs) != "Model":
                 continue
-            box = _alt_character_box(mem, model, offs)
+            box = _alt_character_box(mem, model, offs, rej=rej)
             if box:
-                out.append((model, team_key, box))
+                out.append((model, team_key, box, team))
                 if len(out) >= limit:
                     return out
     return out
@@ -532,10 +548,50 @@ def get_dead_characters(mem, ws, offs, limit=40):
     return out
 
 
+def get_deadbody_raw(mem, ws, offs, limit=60):
+    """All models under Ignore/DeadBody with an approximate position,
+    skipping shape guards so lying-flat corpses always count."""
+    out = []
+    if not ws:
+        return out
+    ignore = 0
+    for child in get_children(mem, ws, offs):
+        if (class_name(mem, child, offs) == "Folder"
+                and instance_name(mem, child, offs) == "Ignore"):
+            ignore = child
+            break
+    if not ignore:
+        return out
+    for child in get_children(mem, ignore, offs):
+        if (class_name(mem, child, offs) != "Folder"
+                or instance_name(mem, child, offs) != "DeadBody"):
+            continue
+        for model in get_children(mem, child, offs):
+            if class_name(mem, model, offs) != "Model":
+                continue
+            pos = None
+            box = _alt_character_box(mem, model, offs)
+            if box:
+                pos = box[0]
+            else:
+                for part in get_children(mem, model, offs):
+                    pc = class_name(mem, part, offs)
+                    if pc in ("Part", "MeshPart", "UnionOperation"):
+                        pos = get_part_position(mem, part, offs)
+                        if pos:
+                            break
+            out.append((model, pos))
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def get_local_character_alt(mem, ws, offs):
     """Find the local player's character when it has been reparented under
     Workspace/Folder:Ignore (Phantom Forces keeps the local Humanoid there
-    while remote characters lose theirs)."""
+    while remote characters lose theirs). Corpse models inside the DeadBody
+    sub-folder are skipped so a nearby ragdoll can never pose as the local
+    rig."""
     if not ws:
         return 0
     for child in get_children(mem, ws, offs):
@@ -543,10 +599,13 @@ def get_local_character_alt(mem, ws, offs):
             continue
         if instance_name(mem, child, offs) != "Ignore":
             continue
-        for model in get_children(mem, child, offs):
-            if (class_name(mem, model, offs) == "Model"
-                    and find_descendant_of_class(mem, model, "Humanoid", offs)):
-                return model
+        for sub in get_children(mem, child, offs):
+            cn = class_name(mem, sub, offs)
+            if cn == "Folder" and instance_name(mem, sub, offs) == "DeadBody":
+                continue
+            if (cn == "Model"
+                    and find_descendant_of_class(mem, sub, "Humanoid", offs)):
+                return sub
     return 0
 
 
@@ -571,6 +630,33 @@ def get_team_color(mem, player, offs):
     if not tc:
         return 0
     return mem.u32(player + tc)
+
+
+def get_team_color_map(mem, players, offs):
+    """Map character-model address -> TeamColor id for every remote player,
+    plus the local player's own TeamColor id.
+
+    Phantom Forces leaves Player.Team nil, so TeamColor is the only
+    per-player team signal. Matching the local id against the team folders'
+    member models identifies the local team without spatial guesses and
+    survives respawns and team switches."""
+    out = {}
+    local_tc = 0
+    if not players:
+        return out, local_tc
+    lp = get_local_player(mem, players, offs)
+    if lp:
+        local_tc = get_team_color(mem, lp, offs)
+    for child in get_children(mem, players, offs):
+        if child == lp or class_name(mem, child, offs) != "Player":
+            continue
+        tc = get_team_color(mem, child, offs)
+        if not tc:
+            continue
+        char = get_character(mem, child, offs)
+        if char:
+            out[char] = tc
+    return out, local_tc
 
 
 def get_equipped_tool(mem, char, offs):
@@ -700,9 +786,10 @@ def project_vertical(cam, center_world, world_h, vw, vh):
 
 
 def tracer_endpoint(world, cam, vw, vh):
-    """Screen point a tracer line should aim at, including for targets behind
-    the camera. Behind-camera targets project onto the correct screen side
-    (turn-right -> right edge) and get clamped into view."""
+    """Screen point a tracer line should aim at. On-screen targets return the
+    exact projection (edge=False). Off-screen or behind-camera targets return
+    the point where the true-bearing ray from screen centre crosses the window
+    edge (edge=True), turning the tracer into an off-screen indicator."""
     if cam is None or world is None or vw <= 0 or vh <= 0:
         return None
     rx = world[0] - cam.pos[0]
@@ -711,15 +798,32 @@ def tracer_endpoint(world, cam, vw, vh):
     cx = rx * cam.right[0] + ry * cam.right[1] + rz * cam.right[2]
     cy = rx * cam.up[0] + ry * cam.up[1] + rz * cam.up[2]
     cz = rx * cam.look[0] + ry * cam.look[1] + rz * cam.look[2]
-    if abs(cz) < 0.1:
-        return None
     focal = (vh / 2.0) / math.tan(cam.fov / 2.0)
-    m = abs(cz)
-    sx = vw / 2.0 + (cx / m) * focal
-    sy = vh / 2.0 - (cy / m) * focal
     if cz > 0.1:
-        return (sx, sy)
-    margin = 8
-    sx = max(margin, min(vw - margin, sx))
-    sy = max(margin, min(vh - margin, sy))
-    return (sx, sy)
+        sx = vw / 2.0 + (cx / cz) * focal
+        sy = vh / 2.0 - (cy / cz) * focal
+        if 0.0 <= sx <= vw and 0.0 <= sy <= vh:
+            return (sx, sy, False)
+    dx = cx
+    dy = -cy
+    mag = math.hypot(dx, dy)
+    if mag < 1e-6:
+        return None
+    ux = dx / mag
+    uy = dy / mag
+    margin = 10.0
+    ox = vw / 2.0
+    oy = vh / 2.0
+    ts = []
+    if ux > 1e-6:
+        ts.append((vw - margin - ox) / ux)
+    elif ux < -1e-6:
+        ts.append((margin - ox) / ux)
+    if uy > 1e-6:
+        ts.append((vh - margin - oy) / uy)
+    elif uy < -1e-6:
+        ts.append((margin - oy) / uy)
+    if not ts:
+        return None
+    t = max(0.0, min(ts))
+    return (ox + ux * t, oy + uy * t, True)

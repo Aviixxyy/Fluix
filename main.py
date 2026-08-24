@@ -4,6 +4,7 @@ import random
 import sys
 import threading
 import time
+import traceback
 from ctypes import wintypes as wt
 
 import config
@@ -187,7 +188,8 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
         mid = (pos[0], (foot_y + head_y) * 0.5, pos[2])
         dead = bool(entry.get("health", 1.0) <= 0.0)
         fade = bool(esp_cfg.get("fade_dead", True)) and dead
-        teammate = bool(local_team and entry.get("team") == local_team)
+        teammate = bool(local_team and entry.get("team") == local_team) \
+            or bool(entry.get("forced_teammate"))
         dead_color = colors.get("dead", (125, 125, 138))
         role = entry.get("role")
         rrole = game_cfg["roles"].get(role) if (game_cfg and role) else None
@@ -215,6 +217,9 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
                         tracer_color = colors.get("highlight", (139, 92, 246))
                     overlay.line(vw / 2.0, vh / 2.0, te[0], te[1], tracer_color,
                                  2 if is_tgt else 1)
+                    if te[2]:
+                        _draw_arrowhead(overlay, vw / 2.0, vh / 2.0,
+                                        te[0], te[1], tracer_color)
 
         pr = roblox.project_vertical(cam, mid, world_h, vw, vh)
         if not pr:
@@ -410,6 +415,8 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
     lock_dd = None
     for e in snap.get("entries", []):
         if e.get("is_local") or not e.get("alive", True):
+            continue
+        if e.get("forced_teammate"):
             continue
         if team_check and local_team and e.get("team") == local_team:
             continue
@@ -621,8 +628,140 @@ def _send_mouse_move(dx, dy):
                                  ctypes.sizeof(overlay_mod.INPUT))
 
 
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+
+
+def _press_mouse(flags):
+    mi = overlay_mod.MOUSEINPUT()
+    mi.dx = 0
+    mi.dy = 0
+    mi.mouseData = 0
+    mi.dwFlags = flags
+    mi.time = 0
+    mi.dwExtraInfo = None
+    inp = overlay_mod.INPUT()
+    inp.type = overlay_mod.INPUT_MOUSE
+    inp.mi = mi
+    overlay_mod.user32.SendInput(1, ctypes.byref(inp),
+                                 ctypes.sizeof(overlay_mod.INPUT))
+
+
+_click_lock = threading.Lock()
+
+
+def _send_click():
+    def _fire():
+        if not _click_lock.acquire(blocking=False):
+            return
+        try:
+            _press_mouse(MOUSEEVENTF_LEFTDOWN)
+            time.sleep(random.uniform(0.014, 0.026))
+            _press_mouse(MOUSEEVENTF_LEFTUP)
+        finally:
+            _click_lock.release()
+    threading.Thread(target=_fire, daemon=True).start()
+
+
+def _seg_hits_rect(x0, y0, x1, y1, l, t, r, b):
+    dx = x1 - x0
+    dy = y1 - y0
+    t0 = 0.0
+    t1 = 1.0
+    for p, q in ((-dx, x0 - l), (dx, r - x0),
+                 (-dy, y0 - t), (dy, b - y0)):
+        if p == 0.0:
+            if q < 0.0:
+                return False
+        else:
+            u = q / p
+            if p < 0.0:
+                if u > t1:
+                    return False
+                if u > t0:
+                    t0 = u
+            else:
+                if u < t0:
+                    return False
+                if u < t1:
+                    t1 = u
+    return t0 <= t1
+
+
+def _trigger_hit(snap, esp_cfg, vw, vh, center, prev=None, pad=1.15):
+    cam = snap.get("camera")
+    if not cam:
+        return False
+    local_team = snap.get("local_team", "")
+    team_check = bool(esp_cfg.get("team_check", True))
+    max_dist = float(esp_cfg.get("max_distance", 1500.0))
+    height = float(esp_cfg.get("character_height", 5.0))
+    ratio = float(esp_cfg.get("hrp_ratio", 0.45))
+    min_h = float(esp_cfg.get("min_box_height", 4.0))
+    wr = float(esp_cfg.get("box_width_ratio", 0.5))
+    cx = center[0]
+    cy = center[1]
+    for e in snap.get("entries", []):
+        if e.get("is_local") or not e.get("alive", True):
+            continue
+        if e.get("health", 1.0) <= 0.0:
+            continue
+        if e.get("forced_teammate"):
+            continue
+        if team_check and local_team and e.get("team") == local_team:
+            continue
+        d = e.get("distance")
+        if d is None or d > max_dist:
+            continue
+        pos = e["pos"]
+        ext = e.get("extents")
+        if ext:
+            foot_y = pos[1] + ext[0]
+            head_y = pos[1] + ext[1]
+        else:
+            foot_y = pos[1] - height * ratio
+            head_y = pos[1] + height - height * ratio
+        world_h = max(0.1, head_y - foot_y)
+        mid = (pos[0], (foot_y + head_y) * 0.5, pos[2])
+        pr = roblox.project_vertical(cam, mid, world_h, vw, vh)
+        if not pr:
+            continue
+        px, mid_y, box_h = pr
+        if box_h < min_h:
+            continue
+        box_w = max(box_h * wr, min_h * wr)
+        hw = box_w * 0.5 * pad
+        hh = box_h * 0.5 * pad
+        if prev is None:
+            hit = abs(cx - px) <= hw and abs(cy - mid_y) <= hh
+        else:
+            hit = _seg_hits_rect(prev[0], prev[1], cx, cy,
+                                 px - hw, mid_y - hh, px + hw, mid_y + hh)
+        if hit:
+            return True
+    return False
+
+
 def _shade(color, amt):
     return tuple(max(0, min(255, int(round(c + amt)))) for c in color)
+
+
+def _draw_arrowhead(overlay, ox, oy, ex, ey, color):
+    dx = ex - ox
+    dy = ey - oy
+    m = math.hypot(dx, dy)
+    if m < 1e-3:
+        return
+    ux = dx / m
+    uy = dy / m
+    px = -uy
+    py = ux
+    size = 9.0
+    spread = 5.0
+    bx = ex - ux * size
+    by = ey - uy * size
+    overlay.line(ex, ey, bx + px * spread, by + py * spread, color, 2)
+    overlay.line(ex, ey, bx - px * spread, by - py * spread, color, 2)
 
 
 def _mix(a, b, t):
@@ -866,6 +1005,8 @@ def main():
     stats_ready_at = 0.0
     cam_fail = 0
     cam_fail_logged = 0.0
+    overlay_hidden = False
+    draw_errs = 0
 
     def _stats_done():
         if stats_finder.state == "done":
@@ -934,9 +1075,15 @@ def main():
 
         fg = overlay_mod.user32.GetForegroundWindow()
         if fg != game_hwnd:
+            if not overlay_hidden:
+                overlay_hidden = True
+                status.log("[ESP-cut] overlay hidden (game window not "
+                           "foreground, fg=0x{:X} game=0x{:X})".format(
+                               fg or 0, game_hwnd or 0))
             overlay.hide()
             time.sleep(0.05)
             continue
+        overlay_hidden = False
 
         if not overlay.sync():
             time.sleep(0.05)
@@ -1005,6 +1152,23 @@ def main():
                 _aim["active"] = False
         else:
             _aim["active"] = False
+        trig_key = int(aim_cfg.get("trigger_hotkey", 0) or 0)
+        trig_prev = _aim.get("trig_prev")
+        if aim_cfg.get("trigger", False) and trig_key and \
+                not bool(overlay_mod.user32.GetAsyncKeyState(VK_LBUTTON)
+                         & 0x8000) and \
+                bool(overlay_mod.user32.GetAsyncKeyState(trig_key) & 0x8000):
+            snap_ts = float(snap.get("ts", 0.0) or 0.0)
+            if frame_now - snap_ts <= 0.30 and \
+                    frame_now - _aim.get("trig_last", 0.0) >= \
+                    max(0.05, float(aim_cfg.get("trigger_interval", 0.18))):
+                if _trigger_hit(snap, config.ESP, overlay.w, overlay.h,
+                                aim_center, trig_prev,
+                                float(aim_cfg.get("trigger_padding",
+                                                  1.15))):
+                    _send_click()
+                    _aim["trig_last"] = frame_now
+        _aim["trig_prev"] = (aim_center[0], aim_center[1])
         if frame_now >= hud_state["hint_until"]:
             hud_state["hint"] = ""
 
@@ -1025,6 +1189,14 @@ def main():
                                       (236, 234, 242), (20, 20, 20),
                                       center=True, size=13)
             _draw_hud(overlay, hud, hud_state)
+        except Exception:
+            draw_errs += 1
+            if draw_errs <= 5:
+                try:
+                    status.log("[DRAW-err] {}\n".format(
+                        traceback.format_exc()))
+                except Exception:
+                    pass
         finally:
             overlay.end()
 

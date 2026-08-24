@@ -5,6 +5,15 @@ import config
 
 _SECTIONS = ("esp", "colors", "stealth", "hud", "aimbot")
 
+_GLOBAL_KEYS = {"aimbot": {"hotkey"}}
+
+
+def _scrub(sec, values):
+    drop = _GLOBAL_KEYS.get(sec)
+    if not drop:
+        return values
+    return {k: v for k, v in values.items() if k not in drop}
+
 
 def _read(path):
     try:
@@ -50,13 +59,14 @@ class PergameStore:
             for sec, values in sections.items():
                 if sec not in self._targets or not isinstance(values, dict):
                     continue
-                clean[sec] = {k: v for k, v in values.items() if k in self._targets[sec]}
+                clean[sec] = _scrub(sec, {k: v for k, v in values.items()
+                                          if k in self._targets[sec]})
             self._store[gid] = clean
 
     def _snapshot(self):
         snap = {}
         for sec, cfg in self._targets.items():
-            snap[sec] = dict(cfg)
+            snap[sec] = _scrub(sec, dict(cfg))
         return snap
 
     def _apply(self, gid):
@@ -82,6 +92,10 @@ class PergameStore:
         if gid:
             self._apply(gid)
             self._persist()
+
+    def refresh_active(self):
+        if self._active:
+            self._store[self._active] = self._snapshot()
 
     def close(self):
         if self._active:

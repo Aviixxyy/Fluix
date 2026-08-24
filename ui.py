@@ -152,6 +152,7 @@ def save(esp_cfg, colors_cfg, stealth_cfg, theme=None, hud=None, games=None,
         import pergame
         store = pergame.get_store()
         if store is not None:
+            store.refresh_active()
             data["per_game"] = store.dump()
     except Exception:
         pass
@@ -335,6 +336,9 @@ TOOLTIPS = {
     "tracers": "Draws a line from the centre of the screen to each player.",
     "tool": "Shows the tool each player is holding.",
     "team_check": "Hides teammates. Needs team data from the game.",
+    "exceptions": "Usernames that are always treated as teammates: never "
+                  "aimed at, never auto-fired at, drawn in teammate colors. "
+                  "Separate multiple names with commas or spaces.",
     "show_local_player": "Also draws ESP for your own character.",
     "dynamic_box": "Sizes boxes from the character's real dimensions instead of a fixed height.",
     "fade_dead": "Shrinks and dims the box of dead players.",
@@ -356,6 +360,8 @@ TOOLTIPS = {
     "aim_mode": "HOLD aims while you hold the key. ON FIRE aims while you "
                 "hold the fire button.",
     "aim_hotkey": "Key that enables aim assist while held.",
+    "aim_trigger": "Fires automatically while your crosshair is over an "
+                   "enemy and the trigger key is held.",
     "aim_fov": "How close to your crosshair an enemy must be before the "
                "assist engages (in pixels).",
     "aim_show_fov": "Draws a circle on screen showing the aim assist's FOV "
@@ -1565,6 +1571,27 @@ class SettingsWindow:
         self.dead_tval.config(text="{}%".format(int(round(float(
             self.esp.get("dead_tracer_scale", 0.55)) * 100.0))))
         self._bind_tip((trow, self.dead_tracer), TOOLTIPS["dead_tracer"])
+
+        exrow = tk.Frame(card.body, bg=CARD)
+        exrow.grid(row=10, column=0, columnspan=2, sticky="we", pady=(8, 0))
+        tk.Label(exrow, text="Exceptions", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.exceptions_entry = tk.Entry(
+            exrow, bg=INPUT, fg=TEXT, relief="flat", font=(FONT, 9),
+            highlightthickness=1, highlightbackground=GHOST_BORDER,
+            insertbackground=TEXT)
+        self.exceptions_entry.insert(
+            0, str(self.esp.get("exceptions", "") or ""))
+        self.exceptions_entry.pack(side="left", fill="x", expand=True,
+                                   padx=(10, 0))
+
+        def _on_exceptions(_e=None):
+            self.esp["exceptions"] = self.exceptions_entry.get()
+
+        self.exceptions_entry.bind("<KeyRelease>", _on_exceptions)
+        self.exceptions_entry.bind("<FocusOut>", _on_exceptions)
+        self._bind_tip((exrow, self.exceptions_entry),
+                       TOOLTIPS["exceptions"])
         self._add_reset_button(card.body, "display")
 
     def _build_distance(self, parent):
@@ -1742,6 +1769,40 @@ class SettingsWindow:
         om.pack(side="left", padx=(10, 0))
         self._bind_tip((hot_row, om), TOOLTIPS["aim_hotkey"])
 
+        trig_row = g_next(sticky="we")
+        trig_var = tk.BooleanVar(value=bool(self.aim.get("trigger", False)))
+        self.aim_trig_var = trig_var
+        trig_tgl = Toggle(trig_row, value=trig_var.get())
+        trig_tgl.command = lambda t=trig_tgl: (
+            trig_var.set(t.get()),
+            self.aim.__setitem__("trigger", t.get()))
+        trig_tgl.pack(side="left")
+        trig_txt = tk.Label(trig_row, text="Triggerbot", bg=CARD, fg=TEXT,
+                            font=(FONT, 9, "bold"), cursor="hand2")
+        trig_txt.pack(side="left", padx=(8, 0))
+        tk.Label(trig_row, text="Key", bg=CARD, fg=MUTED,
+                 font=(FONT, 9)).pack(side="left", padx=(14, 0))
+        self.trig_hot_options = {
+            "Mouse X1": 0x05, "Mouse X2": 0x06, "Ctrl": 0xA2,
+            "Alt": 0x04, "Caps": 0x14, "T": 0x54,
+        }
+        cur_tk = int(self.aim.get("trigger_hotkey", 0x05))
+        self.trig_hot = tk.StringVar(
+            value=_vk_to_label(cur_tk, self.trig_hot_options))
+        trig_choices = list(self.trig_hot_options.keys()) + ["Custom..."]
+        om_t = tk.OptionMenu(trig_row, self.trig_hot, *trig_choices,
+                             command=self._on_trigger_hotkey)
+        om_t.configure(bg=INPUT, fg=TEXT, activebackground=ACCENT,
+                       activeforeground="#ffffff", relief="flat",
+                       highlightthickness=1, highlightbackground=GHOST_BORDER,
+                       font=(FONT, 9), width=10)
+        menu_t = om_t["menu"]
+        menu_t.configure(bg=INPUT, fg=TEXT, activebackground=ACCENT,
+                         activeforeground="#ffffff", relief="flat",
+                         font=(FONT, 9))
+        om_t.pack(side="left", padx=(8, 0))
+        self._bind_tip((trig_row,), TOOLTIPS["aim_trigger"])
+
         fov_row = g_next(sticky="we")
         tk.Label(fov_row, text="FOV (px)", bg=CARD, fg=TEXT,
                  font=(FONT, 9)).pack(side="left")
@@ -1883,10 +1944,30 @@ class SettingsWindow:
         if vk is not None:
             self.aim["hotkey"] = vk
 
-    def _begin_hotkey_capture(self):
+    def _on_trigger_hotkey(self, name):
+        if name == "Custom...":
+            self._begin_hotkey_capture("trigger")
+            return
+        vk = self.trig_hot_options.get(name)
+        if vk is not None:
+            self.aim["trigger_hotkey"] = vk
+
+    def _capture_apply_vk(self, vk):
+        if getattr(self, "_capture_target", "aim") == "trigger":
+            self.aim["trigger_hotkey"] = vk
+            self.trig_hot.set(_vk_to_label(vk, self.trig_hot_options))
+        else:
+            self.aim["hotkey"] = vk
+            self.aim_hot.set(_vk_to_label(vk, self.aim_hot_options))
+
+    def _begin_hotkey_capture(self, target="aim"):
         self._finish_hotkey_capture()
+        self._capture_target = target
         self._capturing = True
-        self.aim_hot.set("Press a key...")
+        if target == "trigger":
+            self.trig_hot.set("Press a key...")
+        else:
+            self.aim_hot.set("Press a key...")
         self._capture_after = self.root.after(6000,
                                               self._finish_hotkey_capture)
         self.root.focus_force()
@@ -1897,8 +1978,7 @@ class SettingsWindow:
     def _on_hotkey_capture(self, event):
         vk = _keysym_to_vk(event.keysym)
         if vk is not None:
-            self.aim["hotkey"] = vk
-            self.aim_hot.set(_vk_to_label(vk, self.aim_hot_options))
+            self._capture_apply_vk(vk)
             self._finish_hotkey_capture()
         return "break"
 
@@ -1907,8 +1987,7 @@ class SettingsWindow:
             return
         for vk in _MOUSE_CAPTURE_VKS:
             if _user32.GetAsyncKeyState(vk) & 0x8000:
-                self.aim["hotkey"] = vk
-                self.aim_hot.set(_vk_to_label(vk, self.aim_hot_options))
+                self._capture_apply_vk(vk)
                 self._finish_hotkey_capture()
                 return
         self._mouse_after = self.root.after(40, self._poll_mouse_capture)
@@ -1934,8 +2013,13 @@ class SettingsWindow:
             self._mouse_after = None
         if getattr(self, "_capturing", False):
             self._capturing = False
-            self.aim_hot.set(_vk_to_label(
-                self.aim.get("hotkey", 0x45), self.aim_hot_options))
+            if getattr(self, "_capture_target", "aim") == "trigger":
+                self.trig_hot.set(_vk_to_label(
+                    self.aim.get("trigger_hotkey", 0x05),
+                    self.trig_hot_options))
+            else:
+                self.aim_hot.set(_vk_to_label(
+                    self.aim.get("hotkey", 0x45), self.aim_hot_options))
 
     def _on_aim_fov_slide(self, _=None):
         v = int(round(self.aim_fov.get()))

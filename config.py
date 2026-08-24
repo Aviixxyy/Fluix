@@ -26,6 +26,7 @@ ESP = {
     "tool": False,
     "tool_refresh_s": 0.5,
     "team_check": True,
+    "exceptions": "",
     "show_local_player": False,
     "max_distance": 1500.0,
     "distance_units": "studs",
@@ -151,6 +152,10 @@ AIMBOT = {
     "orbit_radius": 60.0,
     "lock_keep": 1.5,
     "show_fov": True,
+    "trigger": False,
+    "trigger_hotkey": 0x05,
+    "trigger_interval": 0.18,
+    "trigger_padding": 1.15,
 }
 
 OFFSETS = {
@@ -188,7 +193,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "1.0.17"
+APP_VERSION = "1.0.18"
 
 
 

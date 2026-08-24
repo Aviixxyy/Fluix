@@ -70,6 +70,35 @@ class EspReader(threading.Thread):
         self._last_local_team = ""
         self._scan_busy = False
         self._last_scan = 0.0
+        self._dbg_last_n = 0
+        self._rig_last_seen = {}
+        self._rig_last_box = {}
+        self._rig_fresh = set()
+        self._rig_motion = {}
+        self._rig_parts = {}
+        self._rig_hum = {}
+        self._tc_map = ({}, 0)
+        self._last_hum = (0, 0, 0)
+        self._last_ndl = 0
+        self._last_lsrc = ""
+        self._local_char = 0
+        self._last_lchar = 0
+        self._spawn_ts = 0.0
+        self._spawn_votes = {}
+        self._lock_done = True
+        self._team_lock = ""
+        self._lock_tc = None
+        self._pulse_ts = 0.0
+        self._pulse_n = 0
+        self._pulse_dead = {}
+        self._pulse_drops = 0
+        self._last_local_pos = None
+        self._last_local_pos_ts = 0.0
+        self._last_scan_dur = 0.0
+        self._scan_scheduled = 0
+        self._scan_ran = 0
+        self._last_scan_err = ""
+        self._last_probe = ""
         self.snapshot = {
             "camera": None,
             "local_pos": None,
@@ -85,6 +114,7 @@ class EspReader(threading.Thread):
             "game_name": "",
             "cam_addr": 0,
             "local_anchor": None,
+            "ts": 0.0,
         }
 
     def stop(self):
@@ -151,6 +181,11 @@ class EspReader(threading.Thread):
         offs = self.offs
         esp = self.esp_cfg
         now = time.monotonic()
+        self._publish(ts=now)
+        exc_raw = esp.get("exceptions") or ""
+        if not isinstance(exc_raw, str):
+            exc_raw = " ".join(str(x) for x in exc_raw)
+        exc_set = {w.lower() for w in exc_raw.replace(",", " ").split() if w}
 
 
 
@@ -232,10 +267,18 @@ class EspReader(threading.Thread):
         local_humanoid = roblox.get_humanoid(mem, local_char, offs) if local_char else 0
         local_hrp = roblox.get_root_part(mem, local_char, local_humanoid, offs) if local_char else 0
         local_pos = roblox.get_part_position(mem, local_hrp, offs) if local_hrp else None
+        local_pos_fresh = local_pos is not None
+        if local_pos:
+            self._last_local_pos = local_pos
+            self._last_local_pos_ts = now
+        elif self._last_local_pos is not None and \
+                now - self._last_local_pos_ts < 4.0:
+            local_pos = self._last_local_pos
         local_anchor = (local_pos[0], local_pos[1] + 1.5, local_pos[2]) if local_pos else None
 
         cam = roblox.get_camera(mem, ws, offs)
         camera = roblox.read_camera(mem, cam, offs, anchor=local_anchor) if cam else None
+        cam_fresh = camera is not None
         if camera is None:
             camera = self._last_camera
         else:
@@ -288,6 +331,7 @@ class EspReader(threading.Thread):
                     if len(self._heads) > 256:
                         self._heads.clear()
             name = roblox.instance_name(mem, p, offs) or "?"
+            forced_teammate = name.strip().lower() in exc_set
             if team_color_teams:
                 tc = roblox.get_team_color(mem, p, offs)
                 team = "tc:{}".format(tc) if tc else ""
@@ -303,7 +347,9 @@ class EspReader(threading.Thread):
 
             if not esp.get("show_local_player", False) and is_local:
                 continue
-            if esp.get("team_check", True) and not is_local and local_team and team == local_team:
+            if (esp.get("team_check", True) and not is_local
+                    and not forced_teammate and local_team
+                    and team == local_team):
                 skipped_team += 1
                 continue
             if distance is not None and distance > esp.get("max_distance", 300.0):
@@ -344,6 +390,7 @@ class EspReader(threading.Thread):
             entries.append({
                 "name": name,
                 "team": team,
+                "forced_teammate": forced_teammate,
                 "health": health,
                 "max_health": max_health,
                 "pos": pos,
@@ -358,11 +405,13 @@ class EspReader(threading.Thread):
             })
 
         alt_count = 0
+        alt_tally = {}
         if not entries and (game_cfg is None or game_cfg.get("alt_characters", False)):
             alt_ts, alt_cached = self._alt_cache
             alt_models = []
-            for model, team_key, box in alt_cached:
-                pos, extents, head, anchor, apos = box
+            for model, team_key, box, tfolder in alt_cached:
+                pos, extents, head, anchor, apos, nparts = box
+                self._rig_parts[model] = nparts
                 if anchor and apos:
                     ap = roblox.get_part_position(mem, anchor, offs)
                     if ap:
@@ -371,12 +420,111 @@ class EspReader(threading.Thread):
                         dz = ap[2] - apos[2]
                         pos = (pos[0] + dx, pos[1] + dy, pos[2] + dz)
                         head = (head[0] + dx, head[1] + dy, head[2] + dz)
-                alt_models.append((model, team_key, (pos, extents, head)))
+                alt_models.append((model, team_key, (pos, extents, head),
+                                   tfolder))
             alt_local_key = ""
             alt_local_model = 0
-            if local_pos:
+            lsrc = ""
+            m2tc, local_tc = self._tc_map
+            if local_tc and getattr(self, "_lock_tc", None) and \
+                    local_tc != self._lock_tc:
+                self._team_lock = ""
+                self._lock_tc = None
+            lchar = getattr(self, "_local_char", 0)
+            if lchar != getattr(self, "_last_lchar", 0):
+                self._last_lchar = lchar
+                self._spawn_ts = now if lchar else 0.0
+                self._spawn_votes = {}
+                self._lock_done = False
+            if lchar and not getattr(self, "_lock_done", True):
+                win = now - getattr(self, "_spawn_ts", 0.0)
+                if local_pos and local_pos_fresh and 0.0 <= win <= 3.0:
+                    for model, team_key, box, _tf in alt_models:
+                        if model not in self._rig_fresh:
+                            continue
+                        p, _, _ = box
+                        if not p:
+                            continue
+                        dx = p[0] - local_pos[0]
+                        dy = p[1] - local_pos[1]
+                        dz = p[2] - local_pos[2]
+                        if dx * dx + dy * dy + dz * dz < 1600.0:
+                            self._spawn_votes[team_key] = \
+                                self._spawn_votes.get(team_key, 0) + 1
+                nvotes = sum(self._spawn_votes.values())
+                if nvotes >= 3 or (win > 3.0 and nvotes >= 1):
+                    self._team_lock = max(self._spawn_votes,
+                                          key=self._spawn_votes.get)
+                    self._lock_tc = local_tc or self._lock_tc
+                    self._lock_done = True
+                elif win > 3.0:
+                    self._lock_done = True
+            if not alt_local_key and getattr(self, "_team_lock", ""):
+                alt_local_key = self._team_lock
+                lsrc = "lock"
+            if local_tc and m2tc:
+                folder_tc = {}
+                for model, team_key, box, _tf in alt_models:
+                    if model in self._rig_fresh:
+                        tc = m2tc.get(model)
+                        if tc and team_key not in folder_tc:
+                            folder_tc[team_key] = tc
+                for tk, tc in folder_tc.items():
+                    if tc == local_tc:
+                        alt_local_key = tk
+                        lsrc = "tc"
+                        break
+            if not alt_local_key and team_color_teams:
+                color_ts, color_cached = self._color_cache
+                if color_cached:
+                    folder_cols, local_col = color_cached
+                    best_key = ""
+                    best_d = None
+                    second_d = None
+                    if local_col:
+                        colored = [tk for tk, col in folder_cols.items()
+                                   if col]
+                        if len(colored) >= 2:
+                            dists = []
+                            for tk in colored:
+                                col = folder_cols[tk]
+                                d = math.sqrt((col[0] - local_col[0]) ** 2 +
+                                              (col[1] - local_col[1]) ** 2 +
+                                              (col[2] - local_col[2]) ** 2)
+                                dists.append((d, tk))
+                            dists.sort()
+                            best_d, best_key = dists[0]
+                            if len(dists) > 1:
+                                second_d = dists[1][0]
+                    cur = getattr(self, "_col_team", "")
+                    if best_key and best_d is not None and best_d < 0.35:
+                        accept = True
+                        if cur and best_key != cur:
+                            accept = (second_d is not None
+                                      and best_d <= second_d - 0.08)
+                        if accept:
+                            self._col_team = best_key
+                            self._col_miss_ts = 0.0
+                    elif cur:
+                        if best_d is None or best_d > 0.6:
+                            if not self._col_miss_ts:
+                                self._col_miss_ts = now
+                            elif now - self._col_miss_ts > 2.0:
+                                self._col_team = ""
+                                self._col_miss_ts = 0.0
+                        else:
+                            self._col_miss_ts = 0.0
+                    if getattr(self, "_col_team", ""):
+                        alt_local_key = self._col_team
+                        lsrc = "col"
+            if not alt_local_key and self._last_local_team:
+                alt_local_key = self._last_local_team
+                lsrc = "sticky"
+            if not alt_local_key and local_pos and local_pos_fresh:
                 best_d2 = 3.0 * 3.0
-                for model, team_key, box in alt_models:
+                for model, team_key, box, _tf in alt_models:
+                    if model not in self._rig_fresh:
+                        continue
                     pos, _, _ = box
                     if not pos:
                         continue
@@ -388,40 +536,119 @@ class EspReader(threading.Thread):
                         best_d2 = d2
                         alt_local_key = team_key
                         alt_local_model = model
-            if alt_local_key:
-                local_team = alt_local_key
-            elif team_color_teams:
-                color_ts, color_cached = self._color_cache
-                if color_cached:
-                    folder_cols, local_col = color_cached
-                    best_key = ""
-                    best_d = None
-                    if local_col:
-                        for tk, col in folder_cols.items():
-                            if not col:
-                                continue
-                            d = math.sqrt((col[0] - local_col[0]) ** 2 +
-                                          (col[1] - local_col[1]) ** 2 +
-                                          (col[2] - local_col[2]) ** 2)
-                            if best_d is None or d < best_d:
-                                best_d = d
-                                best_key = tk
-                        if best_key and best_d is not None and best_d < 0.35:
-                            alt_local_key = best_key
+                        lsrc = "near"
             if alt_local_key:
                 local_team = alt_local_key
             if local_team:
                 self._last_local_team = local_team
             else:
                 local_team = self._last_local_team
-            for model, team_key, box in alt_models:
+            self._last_lsrc = lsrc
+            alt_tally = {}
+            pulsed = set()
+            cands = []
+            if self._pulse_n > 0 and now - self._pulse_ts <= 4.0:
+                pulse_pos = getattr(self, "_pulse_positions", []) or []
+                for model, team_key, box, _tf in alt_models:
+                    if model in self._pulse_dead:
+                        continue
+                    if model in self._rig_fresh and \
+                            self._rig_parts.get(model, 0) >= 4:
+                        continue
+                    p = box[0]
+                    if not p or not pulse_pos:
+                        continue
+                    best_d2 = None
+                    for dp in pulse_pos:
+                        ddx = p[0] - dp[0]
+                        ddy = p[1] - dp[1]
+                        ddz = p[2] - dp[2]
+                        d2 = ddx * ddx + ddy * ddy + ddz * ddz
+                        if best_d2 is None or d2 < best_d2:
+                            best_d2 = d2
+                    if best_d2 is not None and best_d2 < 64.0:
+                        cands.append((best_d2, model))
+                cands.sort()
+                n_drop = min(self._pulse_n, len(cands))
+                for i in range(n_drop):
+                    pulsed.add(cands[i][1])
+                    self._pulse_dead[cands[i][1]] = now
+                    self._pulse_drops += 1
+                self._pulse_n -= n_drop
+            elif now - self._pulse_ts > 4.0 and self._pulse_n:
+                self._pulse_n = 0
+            if esp.get("debug", False) and \
+                    getattr(self, "_pulse_fresh_event", False):
+                self._pulse_fresh_event = False
+                status.log(
+                    "[ESP-pulse] pos={} dropped={} cand_d2={}".format(
+                        [(round(p[0]), round(p[1]), round(p[2]))
+                         for p in (getattr(self, "_pulse_positions", []) or [])],
+                        [hex(m) for m in pulsed],
+                        [round(d2, 1) for d2, _m in cands[:4]]))
+            for model, team_key, box, tfolder in alt_models:
                 alt_count += 1
+                t = alt_tally.setdefault(team_key, [0, 0, 0, 0, 0, 0])
+                if model in self._rig_fresh:
+                    t[0] += 1
+                else:
+                    t[1] += 1
                 pos, extents, head = box
+                healthy = self._rig_parts.get(model, 0) >= 4
+                if not healthy and model not in self._rig_motion:
+                    skipped_dead += 1
+                    continue
+                if model in pulsed or model in self._pulse_dead:
+                    t[5] += 1
+                    skipped_dead += 1
+                    continue
+                mrec = self._rig_motion.get(model)
+                h = extents[1] - extents[0]
+                rag = 0
+                if mrec is None:
+                    self._rig_motion[model] = [pos, now, now, 0.0, h, 0.0]
+                else:
+                    prev_h = mrec[4] if len(mrec) > 4 else 6.0
+                    if len(mrec) < 6:
+                        mrec.extend([h, 0.0])
+                    else:
+                        mrec[4] = h
+                    if prev_h >= 4.5 and h <= 2.7:
+                        rag = 1
+                    if h <= 2.7:
+                        if not mrec[5]:
+                            mrec[5] = now
+                        elif now - mrec[5] > 2.0:
+                            rag = 1
+                    else:
+                        mrec[5] = 0.0
+                    mdx = pos[0] - mrec[0][0]
+                    mdy = pos[1] - mrec[0][1]
+                    mdz = pos[2] - mrec[0][2]
+                    mdd = mdx * mdx + mdy * mdy + mdz * mdz
+                    if mdd > 0.1225:
+                        mrec[0] = pos
+                        mrec[2] = now
+                        mrec[3] = mrec[3] + math.sqrt(mdd)
+                    elif now - mrec[2] > 3.5 or \
+                            (mrec[2] == mrec[1] and
+                             now - mrec[1] > 0.8) or \
+                            (not healthy and
+                             now - mrec[2] > 1.0) or \
+                            (now - mrec[1] > 10.0 and
+                             mrec[3] < 2.0):
+                        rag = 1
+                    if rag:
+                        t[2] += 1
+                        skipped_dead += 1
+                        continue
                 is_local = bool(alt_local_model and model == alt_local_model)
                 if not esp.get("show_local_player", False) and is_local:
+                    t[2] += 1
                     continue
                 if esp.get("team_check", True) and not is_local and \
                         local_team and team_key == local_team:
+                    t[3] += 1
                     skipped_team += 1
                     continue
                 distance = None
@@ -430,6 +657,7 @@ class EspReader(threading.Thread):
                     dz = pos[2] - local_pos[2]
                     distance = math.sqrt(dx * dx + dz * dz)
                 if distance is not None and distance > esp.get("max_distance", 300.0):
+                    t[4] += 1
                     skipped_dist += 1
                     continue
                 entries.append({
@@ -448,11 +676,20 @@ class EspReader(threading.Thread):
                     "occluded": False,
                 })
 
+            if len(self._rig_motion) > 400:
+                live_keys = {m for m, _, _, _ in alt_cached}
+                self._rig_motion = {k: v for k, v in
+                                    self._rig_motion.items()
+                                    if k in live_keys}
+                self._rig_parts = {k: v for k, v in
+                                   self._rig_parts.items()
+                                   if k in live_keys}
+
             if not esp.get("skip_dead", False) and \
                     (game_cfg is None or game_cfg.get("alt_characters", False)):
                 dead_ts, dead_cached = self._dead_cache
                 for model, box in dead_cached:
-                    pos, extents, head, anchor, apos = box
+                    pos, extents, head, anchor, apos, _npc = box
                     if anchor and apos:
                         ap = roblox.get_part_position(mem, anchor, offs)
                         if ap:
@@ -535,6 +772,31 @@ class EspReader(threading.Thread):
                 server_count))
             status.log("[ESP-dbg] local_team={!r} alt={} tc_mode={}".format(
                 local_team, alt_count, team_color_teams))
+            status.log("[ESP-team] lpos_fresh={} lteam={} lsrc={} lk={}/{} "
+                       "pl={}/{} scandur={:.3f}s "
+                       "sched={} ran={} err={} ltc={} ntc={} hum={}/{} "
+                       "db={} ndl={} probe={} tally={}".format(
+                           local_pos_fresh, local_team,
+                           getattr(self, "_last_lsrc", ""),
+                           getattr(self, "_team_lock", ""),
+                           sum(getattr(self, "_spawn_votes", {}).values()),
+                           self._pulse_n, self._pulse_drops,
+                           self._last_scan_dur,
+                           self._scan_scheduled, self._scan_ran,
+                           self._last_scan_err,
+                           self._tc_map[1], len(self._tc_map[0]),
+                           self._last_hum[0], self._last_hum[1],
+                           self._last_hum[2], self._last_ndl,
+                           self._last_probe,
+                           {k: tuple(v) for k, v in alt_tally.items()}))
+            par_samples = []
+            poff = roblox.O(offs, "Instance", "Parent")
+            for model, team_key, box, tfolder in alt_models[:3]:
+                par = mem.ptr(model + poff) if poff else 0
+                par_samples.append("par=0x{:X} tf=0x{:X}".format(
+                    par or 0, tfolder or 0))
+            status.log("[ESP-par] poff={} {}".format(
+                poff, "; ".join(par_samples)))
             ws_children = ["{}:{}".format(
                 roblox.class_name(mem, k, offs),
                 roblox.instance_name(mem, k, offs))
@@ -587,6 +849,28 @@ class EspReader(threading.Thread):
             threading.Thread(target=self._lookup_game_name, args=(game_id,),
                              daemon=True, name="GameName").start()
 
+        if esp.get("debug", False):
+            n_now = len(entries)
+            if self._dbg_last_n > 0 and n_now == 0:
+                ats, ac = self._alt_cache
+                status.log(
+                    "[ESP-cut] DROP n={}->0 cam_fresh={} local_pos={} "
+                    "alt_n={} alt_age={:.1f}s scan_busy={} seen={} no_char={} "
+                    "no_humanoid={} no_pos={} skip_team={} skip_dist={} "
+                    "skip_dead={} lteam={} lsrc={} lk={}/{} rej={} "
+                    "tally={}".format(
+                        self._dbg_last_n, cam_fresh, local_pos is not None,
+                        len(ac), now - ats, self._scan_busy, seen, no_char,
+                        no_humanoid, no_pos, skipped_team, skipped_dist,
+                        skipped_dead, local_team, getattr(self, "_last_lsrc",
+                                                         ""),
+                        getattr(self, "_team_lock", ""),
+                        sum(getattr(self, "_spawn_votes", {}).values()),
+                        getattr(self, "_last_probe", ""), alt_tally))
+            elif self._dbg_last_n == 0 and n_now > 0:
+                status.log("[ESP-cut] RECOVER 0->{}".format(n_now))
+            self._dbg_last_n = n_now
+
         self._publish(camera=camera, local_pos=local_pos, local_team=local_team,
                       entries=entries, items=items, ok=True, message="",
                       server_players=server_count, ping=None, game=game_key,
@@ -600,37 +884,223 @@ class EspReader(threading.Thread):
                 now - self._last_scan >= scan_gap and not self._scan_busy:
             self._last_scan = now
             self._scan_busy = True
+            self._scan_scheduled += 1
             threading.Thread(target=self._refresh_alt_caches,
-                             args=(now, ws, mem, offs, esp, game_cfg),
+                             args=(now, ws, mem, offs, esp, game_cfg,
+                                   players),
                              daemon=True, name="AltScan").start()
 
-    def _refresh_alt_caches(self, now, ws, mem, offs, esp, game_cfg):
+    def _refresh_alt_caches(self, now, ws, mem, offs, esp, game_cfg,
+                            players=0):
+        t0 = time.time()
+        self._scan_ran += 1
         try:
             alt_models = []
-            for model, team_key, box in roblox.get_alt_characters(
-                    mem, ws, offs):
-                alt_models.append((model, team_key, box))
+            fresh_set = set()
+            with_hum = 0
+            dead_hum = 0
+            dead_db = 0
+            rej = {} if esp.get("debug", False) else None
+            found = roblox.get_alt_characters(mem, ws, offs, rej=rej)
+            self._tc_map = roblox.get_team_color_map(mem, players, offs)
+            dead_list = roblox.get_dead_characters(mem, ws, offs)
+            self._dead_cache = (now, dead_list)
+            dead_pos = []
+            for _dm, dbox in dead_list:
+                dpos = dbox[0]
+                if dpos:
+                    dead_pos.append(dpos)
+            ndl_now = len(dead_pos)
+            self._last_ndl = ndl_now
+            self._last_dead_pos = dead_pos
+            raw_dead = roblox.get_deadbody_raw(mem, ws, offs)
+            prev_raw = getattr(self, "_raw_dead_addrs", None)
+            cur_raw = {a for a, _p in raw_dead}
+            self._raw_dead_addrs = cur_raw
+            now_pulses = []
+            if prev_raw:
+                for a, p in raw_dead:
+                    if a in prev_raw or not p:
+                        continue
+                    dup = False
+                    for pp, pts in getattr(self, "_pulse_seen", []):
+                        ddx = p[0] - pp[0]
+                        ddy = p[1] - pp[1]
+                        ddz = p[2] - pp[2]
+                        if ddx * ddx + ddy * ddy + ddz * ddz < 16.0 \
+                                and now - pts < 2.0:
+                            dup = True
+                            break
+                    if not dup:
+                        now_pulses.append(p)
+            if now_pulses:
+                seen = getattr(self, "_pulse_seen", [])
+                seen.extend((p, now) for p in now_pulses)
+                self._pulse_ts = now
+                self._pulse_n += len(now_pulses)
+                self._pulse_positions = now_pulses
+                self._pulse_fresh_event = True
+            seen = getattr(self, "_pulse_seen", [])
+            if seen:
+                self._pulse_seen = [(sp, st) for sp, st in seen
+                                    if now - st <= 10.0]
+            if not found and esp.get("debug", False):
+                pf = roblox.get_workspace_players_folder(mem, ws, offs)
+                nteams = 0
+                nmodels = 0
+                if pf:
+                    for team in roblox.get_children(mem, pf, offs):
+                        if roblox.class_name(mem, team, offs) == "Folder":
+                            nteams += 1
+                            for m in roblox.get_children(mem, team, offs):
+                                mc = roblox.class_name(mem, m, offs)
+                                if mc == "Model":
+                                    nmodels += 1
+                self._last_probe = ("pf=0x{:X} teams={} models={} "
+                                    "ws=0x{:X} rej={}".format(
+                                        pf or 0, nteams, nmodels, ws or 0,
+                                        rej))
+            else:
+                self._last_probe = "rej={}".format(rej) \
+                    if rej is not None else ""
+            for model, team_key, box, tfolder in found:
+                if not self._rig_alive(mem, model, offs):
+                    self._rig_last_box.pop(model, None)
+                    self._rig_last_seen.pop(model, None)
+                    self._rig_motion.pop(model, None)
+                    continue
+                hum = self._rig_hum.get(model, -1)
+                if hum == -1:
+                    hum = roblox.find_descendant_of_class(
+                        mem, model, "Humanoid", offs) or 0
+                    self._rig_hum[model] = hum
+                if hum:
+                    with_hum += 1
+                    hoff = roblox.O(offs, "Humanoid", "Health")
+                    if hoff:
+                        try:
+                            hp = mem.f32(hum + hoff)
+                        except Exception:
+                            hp = None
+                        if hp is not None and hp <= 0.0:
+                            dead_hum += 1
+                            self._rig_last_box.pop(model, None)
+                            self._rig_last_seen.pop(model, None)
+                            self._rig_motion.pop(model, None)
+                            continue
+                pos_d = box[0]
+                db_hit = False
+                if pos_d:
+                    for dpos in dead_pos:
+                        dx = pos_d[0] - dpos[0]
+                        dy = pos_d[1] - dpos[1]
+                        dz = pos_d[2] - dpos[2]
+                        if dx * dx + dy * dy + dz * dz < 6.25:
+                            db_hit = True
+                            break
+                if db_hit:
+                    dead_db += 1
+                    self._rig_last_box.pop(model, None)
+                    self._rig_last_seen.pop(model, None)
+                    self._rig_motion.pop(model, None)
+                    continue
+                alt_models.append((model, team_key, box, tfolder))
+                fresh_set.add(model)
+                self._rig_last_seen[model] = now
+                self._rig_last_box[model] = (team_key, box, tfolder)
+            self._last_hum = (with_hum, dead_hum, dead_db)
+            local_stale = now - self._last_local_pos_ts > 2.0
+            for model in list(self._rig_last_box.keys()):
+                if model in fresh_set:
+                    continue
+                if model in self._pulse_dead:
+                    del self._rig_last_box[model]
+                    self._rig_last_seen.pop(model, None)
+                    continue
+                if now - self._rig_last_seen.get(model, 0.0) <= 4.0:
+                    if local_stale:
+                        del self._rig_last_box[model]
+                        self._rig_last_seen.pop(model, None)
+                        continue
+                    team_key, box, tfolder = self._rig_last_box[model]
+                    alt_models.append((model, team_key, box, tfolder))
+                else:
+                    del self._rig_last_box[model]
+                    self._rig_last_seen.pop(model, None)
+            self._rig_fresh = fresh_set
+            if len(self._rig_last_box) > 400:
+                keep = {m for m, ts in self._rig_last_seen.items()
+                        if now - ts <= 4.0}
+                self._rig_last_box = {k: v for k, v in
+                                      self._rig_last_box.items()
+                                      if k in keep}
+                self._rig_last_seen = {k: v for k, v in
+                                       self._rig_last_seen.items()
+                                       if k in keep}
+                self._rig_hum = {k: v for k, v in
+                                 self._rig_hum.items() if k in keep}
             self._alt_cache = (now, alt_models)
+            if self._pulse_dead:
+                self._pulse_dead = {a: t for a, t in
+                                    self._pulse_dead.items()
+                                    if now - t <= 6.0}
+            if len(self._pulse_dead) > 200:
+                self._pulse_dead.clear()
             if game_cfg and game_cfg.get("team_color_teams"):
                 local_char = roblox.get_local_character_alt(mem, ws, offs)
+                self._local_char = local_char or 0
                 local_col = None
                 if local_char:
                     local_col = roblox.dominant_part_color(mem, local_char,
                                                            offs)
+                cols = {}
+                for model, team_key, box, _tf in alt_models:
+                    lst = cols.setdefault(team_key, [])
+                    if len(lst) < 4:
+                        c = roblox.dominant_part_color(mem, model, offs)
+                        if c:
+                            lst.append(c)
                 folder_cols = {}
-                for model, team_key, box in alt_models:
-                    if team_key not in folder_cols:
-                        folder_cols[team_key] = roblox.dominant_part_color(
-                            mem, model, offs)
+                for tk, lst in cols.items():
+                    if not lst:
+                        folder_cols[tk] = None
+                        continue
+                    chans = []
+                    for i in range(3):
+                        vals = sorted(c[i] for c in lst)
+                        n = len(vals)
+                        mid = n // 2
+                        v = (vals[mid] + vals[(n - 1) // 2]) * 0.5
+                        chans.append(v)
+                    folder_cols[tk] = tuple(chans)
                 self._color_cache = (now, (folder_cols, local_col))
-            if not esp.get("skip_dead", False):
-                self._dead_cache = (now, list(
-                    roblox.get_dead_characters(mem, ws, offs)))
-        except Exception:
+        except Exception as exc:
             import traceback
             traceback.print_exc()
+            self._last_scan_err = repr(exc)[:120]
+            status.log("[ESP-scan] ERROR {}".format(repr(exc)[:200]))
         finally:
             self._scan_busy = False
+            self._last_scan_dur = time.time() - t0
+            if self._last_scan_dur > 1.0:
+                status.log("[ESP-scan] slow scan {:.2f}s".format(
+                    self._last_scan_dur))
+
+    def _rig_alive(self, mem, model, offs):
+        cur = mem.ptr(model + roblox.O(offs, "Instance", "Parent"))
+        for _ in range(6):
+            if not cur:
+                return True
+            cls = roblox.class_name(mem, cur, offs)
+            if not cls:
+                return True
+            nm = roblox.instance_name(mem, cur, offs)
+            if cls == "Folder" and nm == "Ignore":
+                return False
+            if cls == "Folder" and nm == "Players":
+                return True
+            cur = mem.ptr(cur + roblox.O(offs, "Instance", "Parent"))
+        return True
 
     def _dump_character(self, logger, mem, node, offs, depth):
         line = []
