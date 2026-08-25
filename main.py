@@ -393,6 +393,17 @@ def _aim_center(cam, anchor, vw, vh):
     return (_cur["x"], _cur["y"], False)
 
 
+def _acquire(cand):
+    _aim["drift_cnt"] = 0
+    _aim["prev_dd"] = None
+    if _aim.get("lock") is None or math.hypot(
+            cand[2][0] - _aim["lock"][0],
+            cand[2][1] - _aim["lock"][1],
+            cand[2][2] - _aim["lock"][2]) > _LOCK_STUDS:
+        _aim["lock_ts"] = time.monotonic()
+    _aim["lock"] = cand[2]
+
+
 def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
     global _aim
     cam = snap.get("camera")
@@ -408,11 +419,20 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
     cx = center[0]
     cy = center[1]
     lock_keep = max(0.5, float(aim_cfg.get("lock_keep", 1.2)))
+    threat_first = bool(aim_cfg.get("threat_first", True))
+    threat_cos = math.cos(math.radians(
+        max(1.0, float(aim_cfg.get("threat_fov_deg", 14.0)))))
+    fallback_closest = bool(aim_cfg.get("fallback_closest", True))
     lock = _aim.get("lock")
     best = None
     best_d = fov
     lock_cand = None
     lock_dd = None
+    threat = None
+    threat_dd = None
+    far = None
+    far_d = None
+    cam_pos = cam.pos
     for e in snap.get("entries", []):
         if e.get("is_local") or not e.get("alive", True):
             continue
@@ -443,6 +463,23 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
         if not sp:
             continue
         dd = math.hypot(sp[0] - cx, sp[1] - cy)
+        if threat_first:
+            lk = e.get("look")
+            if lk:
+                vx = cam_pos[0] - wp[0]
+                vy = cam_pos[1] - wp[1]
+                vz = cam_pos[2] - wp[2]
+                vd = math.sqrt(vx * vx + vy * vy + vz * vz)
+                if vd > 2.0:
+                    dot = (lk[0] * vx + lk[1] * vy + lk[2] * vz) / vd
+                    if dot >= threat_cos and (
+                            threat is None or dd < threat_dd):
+                        threat = (sp[0], sp[1], wp)
+                        threat_dd = dd
+        if fallback_closest:
+            if far is None or d < far_d:
+                far = (sp[0], sp[1], wp)
+                far_d = d
         if lock:
             ldx = wp[0] - lock[0]
             ldy = wp[1] - lock[1]
@@ -453,6 +490,9 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
         if dd <= best_d:
             best_d = dd
             best = (sp[0], sp[1], wp)
+    if threat is not None:
+        _acquire(threat)
+        return (threat[0], threat[1])
     if lock_cand is not None:
         prev = _aim.get("prev_dd")
         if prev is not None and lock_dd > prev + _DRIFT_EPS:
@@ -468,15 +508,11 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
             return None
         return (lock_cand[0], lock_cand[1])
     if best is not None:
-        _aim["drift_cnt"] = 0
-        _aim["prev_dd"] = None
-        if _aim.get("lock") is None or math.hypot(
-                best[2][0] - _aim["lock"][0],
-                best[2][1] - _aim["lock"][1],
-                best[2][2] - _aim["lock"][2]) > _LOCK_STUDS:
-            _aim["lock_ts"] = time.monotonic()
-        _aim["lock"] = best[2]
+        _acquire(best)
         return (best[0], best[1])
+    if fallback_closest and far is not None:
+        _acquire(far)
+        return (far[0], far[1])
     _aim["lock"] = None
     _aim["drift_cnt"] = 0
     _aim["prev_dd"] = None

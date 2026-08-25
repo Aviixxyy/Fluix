@@ -319,6 +319,32 @@ def get_part_position(mem, part, offs):
     return mem.vec3(prim + O(offs, "Primitive", "Position"))
 
 
+def get_part_look(mem, part, offs):
+    """Unit LookVector of a part's CFrame, or None if unreadable.
+
+    The Primitive rotation matrix is stored row-major as
+    [r00 r01 r02; r10 r11 r12; r20 r21 r22] where the third column holds
+    -LookVector, so the look vector is (-r02, -r12, -r22)."""
+    if not part:
+        return None
+    prim = mem.ptr(part + O(offs, "BasePart", "Primitive"))
+    if not prim:
+        return None
+    roff = O(offs, "Primitive", "Rotation")
+    if not roff:
+        return None
+    buf = mem.read(prim + roff, 36)
+    if not buf or len(buf) < 36:
+        return None
+    lx = -struct.unpack_from("<f", buf, 8)[0]
+    ly = -struct.unpack_from("<f", buf, 20)[0]
+    lz = -struct.unpack_from("<f", buf, 32)[0]
+    mag = math.sqrt(lx * lx + ly * ly + lz * lz)
+    if mag < 1e-5:
+        return None
+    return (lx / mag, ly / mag, lz / mag)
+
+
 def get_character_extents(mem, char, root_pos, offs):
     """Compute the character's (foot_offset, head_offset) relative to its
     root part, across all BasePart descendants of the model.

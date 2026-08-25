@@ -402,6 +402,7 @@ class EspReader(threading.Thread):
                 "tool": tool,
                 "role": role,
                 "occluded": False,
+                "look": roblox.get_part_look(mem, hrp, offs),
             })
 
         alt_count = 0

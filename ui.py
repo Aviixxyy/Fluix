@@ -357,6 +357,13 @@ TOOLTIPS = {
              "layout and team samples. Turn this on when reporting a bug.",
     "aim_enabled": "Gently eases your crosshair onto the closest enemy. "
                    "Never writes game memory.",
+    "aim_threat_first": "Prefers enemies that are facing you (their look "
+                        "direction points at your character) over whatever "
+                        "is nearest your crosshair.",
+    "aim_threat_cone": "How precisely an enemy must be looking at you to "
+                       "count as a threat. Smaller = stricter.",
+    "aim_fallback_closest": "When nothing is inside the aim FOV, ease onto "
+                            "the closest visible enemy anyway.",
     "aim_mode": "HOLD aims while you hold the key. ON FIRE aims while you "
                 "hold the fire button.",
     "aim_hotkey": "Key that enables aim assist while held.",
@@ -1928,6 +1935,52 @@ class SettingsWindow:
         self.aim_lock_val.config(text="{:.1f}".format(
             float(self.aim.get("lock_keep", 1.5))))
         self._bind_tip((lock_row, self.aim_lock), TOOLTIPS["aim_lock"])
+
+        th_row = g_next(sticky="we")
+        tf_var = tk.BooleanVar(value=bool(self.aim.get("threat_first", True)))
+        self.aim_threat_first = tf_var
+        tf_tgl = Toggle(th_row, value=tf_var.get())
+        tf_tgl.command = lambda t=tf_tgl: (tf_var.set(t.get()),
+                                           self.aim.__setitem__(
+                                               "threat_first", t.get()))
+        tf_tgl.pack(side="left")
+        tf_txt = tk.Label(th_row, text="Prioritize who's aiming at you",
+                          bg=CARD, fg=TEXT, font=(FONT, 9), cursor="hand2")
+        tf_txt.pack(side="left", padx=(8, 0))
+        tf_txt.bind("<Button-1>", lambda e, t=tf_tgl: t.set(not t.get()))
+        self._bind_tip((th_row, tf_tgl, tf_txt),
+                       TOOLTIPS["aim_threat_first"])
+
+        cone_row = g_next(sticky="we")
+        tk.Label(cone_row, text="Threat cone", bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        self.aim_cone_val = tk.Label(cone_row, text="", bg=CARD, fg=MUTED,
+                                     font=(FONT, 8))
+        self.aim_cone_val.pack(side="right")
+        self.aim_cone = ModernSlider(
+            cone_row, 2, 45, float(self.aim.get("threat_fov_deg", 14.0)),
+            command=self._on_aim_cone_slide, width=300)
+        self.aim_cone.pack(fill="x", pady=(6, 0))
+        self.aim_cone_val.config(text="{:.0f} deg".format(
+            float(self.aim.get("threat_fov_deg", 14.0))))
+        self._bind_tip((cone_row, self.aim_cone),
+                       TOOLTIPS["aim_threat_cone"])
+
+        fb_row = g_next(sticky="we")
+        fb_var = tk.BooleanVar(value=bool(self.aim.get("fallback_closest",
+                                                       True)))
+        self.aim_fallback = fb_var
+        fb_tgl = Toggle(fb_row, value=fb_var.get())
+        fb_tgl.command = lambda t=fb_tgl: (fb_var.set(t.get()),
+                                           self.aim.__setitem__(
+                                               "fallback_closest", t.get()))
+        fb_tgl.pack(side="left")
+        fb_txt = tk.Label(fb_row, text="Fall back to closest visible",
+                          bg=CARD, fg=TEXT, font=(FONT, 9), cursor="hand2")
+        fb_txt.pack(side="left", padx=(8, 0))
+        fb_txt.bind("<Button-1>", lambda e, t=fb_tgl: t.set(not t.get()))
+        self._bind_tip((fb_row, fb_tgl, fb_txt),
+                       TOOLTIPS["aim_fallback_closest"])
         self._add_reset_button(card.body, "aim")
 
     def _pick_aim_mode(self, key):
@@ -2061,6 +2114,11 @@ class SettingsWindow:
         v = round(self.aim_lock.get() / 10.0, 1)
         self.aim["lock_keep"] = v
         self.aim_lock_val.config(text="{:.1f}".format(v))
+
+    def _on_aim_cone_slide(self, _=None):
+        v = round(float(self.aim_cone.get()))
+        self.aim["threat_fov_deg"] = v
+        self.aim_cone_val.config(text="{} deg".format(v))
 
     def _build_themes(self, parent):
         card = Card(parent, "Theme")
