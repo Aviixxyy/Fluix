@@ -57,6 +57,7 @@ class EspReader(threading.Thread):
         self._heads = {}
         self._tool_cache = {}
         self._role_cache = {}
+        self._look_cache = {}
         self._warned_no_team = False
         self._waiting = False
         self._last_camera = None
@@ -387,6 +388,17 @@ class EspReader(threading.Thread):
                     if len(self._role_cache) > 512:
                         self._role_cache.clear()
 
+            look = None
+            if hrp:
+                look_ttl, look_cache = self._look_cache.get(hrp, (0.0, None))
+                if now - look_ttl < 1.0:
+                    look = look_cache
+                else:
+                    look = roblox.get_part_look(mem, hrp, offs)
+                    self._look_cache[hrp] = (now, look)
+                    if len(self._look_cache) > 256:
+                        self._look_cache.clear()
+
             entries.append({
                 "name": name,
                 "team": team,
@@ -402,7 +414,7 @@ class EspReader(threading.Thread):
                 "tool": tool,
                 "role": role,
                 "occluded": False,
-                "look": roblox.get_part_look(mem, hrp, offs),
+                "look": look,
             })
 
         alt_count = 0
