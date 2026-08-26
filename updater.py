@@ -58,6 +58,14 @@ def _build_url(name):
 def check_for_update():
     """Return (version, download_url) if a newer release exists, else None."""
     try:
+        marker = os.path.join(tempfile.gettempdir(), "Fluix_update_ok.flag")
+        pending = os.path.join(tempfile.gettempdir(), "Fluix_update.lock")
+        if os.path.exists(marker):
+            os.remove(marker)
+        elif os.path.exists(pending):
+            _warn_failed_update()
+            return None
+
         data = _fetch_json(_api_url(), config.UPDATE.get("check_timeout", 8))
         tag = str(data.get("tag_name") or "")
         if not tag:
@@ -68,6 +76,21 @@ def check_for_update():
         return version, _build_url(os.path.basename(current_exe()))
     except Exception:
         return None
+
+
+def _warn_failed_update():
+    """Notify the user that the last update failed to apply."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "A previous Fluix update failed to install.\n\n"
+            "Try right-clicking the .exe -> Run as administrator,\n"
+            "or move Fluix to a non-OneDrive folder (e.g. C:\\Fluix).",
+            "Fluix Update",
+            0x00000010 | 0x00001000)
+    except Exception:
+        pass
 
 
 def _download(url, dest, timeout):
@@ -98,12 +121,14 @@ def apply_update(version, url):
         except OSError:
             return False
         vbs = os.path.join(tempfile.gettempdir(), "Fluix_update.vbs")
+        marker = os.path.join(tempfile.gettempdir(), "Fluix_update_ok.flag")
         esc = lambda s: s.replace('"', '""')
         with open(vbs, "w", encoding="utf-8") as f:
             f.write(
                 'Set fso = CreateObject("Scripting.FileSystemObject")\r\n'
                 'Set sh = CreateObject("WScript.Shell")\r\n'
                 'n = 0\r\n'
+                'ok = False\r\n'
                 'Do\r\n'
                 '    On Error Resume Next\r\n'
                 '    fso.CopyFile "{new}", "{exe}", True\r\n'
@@ -117,8 +142,14 @@ def apply_update(version, url):
                 'On Error Resume Next\r\n'
                 'fso.DeleteFile "{lock}"\r\n'
                 'On Error GoTo 0\r\n'
-                'sh.Run "{exe}", 1, False\r\n'.format(
-                    lock=esc(lock), new=esc(new_exe), exe=esc(exe)))
+                'If ok Then\r\n'
+                '    Dim f2: Set f2 = fso.CreateTextFile("{marker}", True)\r\n'
+                '    f2.Write "ok"\r\n'
+                '    f2.Close\r\n'
+                '    sh.Run "{exe}", 1, False\r\n'
+                'End If\r\n'.format(
+                    lock=esc(lock), new=esc(new_exe), exe=esc(exe),
+                    marker=esc(marker)))
         subprocess.Popen(["wscript.exe", vbs],
                          creationflags=0x08000000,
                          close_fds=True)
