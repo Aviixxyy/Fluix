@@ -82,17 +82,23 @@ def _line(fields):
 
 
 def render():
+    if not sys.stdout:
+        return
     fields = _snap()
     sys.stdout.write("\r\x1b[2K" + _line(fields))
     sys.stdout.flush()
 
 
 def clear():
+    if not sys.stdout:
+        return
     sys.stdout.write("\r\x1b[2K")
     sys.stdout.flush()
 
 
 def log(msg):
+    if not sys.stdout:
+        return
     fields = _snap()
     sys.stdout.write("\r\x1b[2K" + msg + "\n")
     sys.stdout.flush()
