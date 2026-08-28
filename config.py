@@ -196,7 +196,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "2.3.2"
+APP_VERSION = "2.3.3"
 
 
 
