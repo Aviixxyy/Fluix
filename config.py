@@ -35,7 +35,7 @@ ESP = {
     "dynamic_box": True,
     "extents_refresh_s": 1.5,
     "box_width_ratio": 0.5,
-    "min_box_height": 4.0,
+    "min_box_height": 1.5,
     "camera_distance": 8.0,
     "fade_dead": True,
     "skip_dead": False,
@@ -196,7 +196,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "2.3.3"
+APP_VERSION = "2.3.4"
 
 
 

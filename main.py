@@ -433,6 +433,7 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
     far = None
     far_d = None
     cam_pos = cam.pos
+    shooter = snap.get("local_pos") or cam_pos
     for e in snap.get("entries", []):
         if e.get("is_local") or not e.get("alive", True):
             continue
@@ -466,9 +467,9 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
         if threat_first:
             lk = e.get("look")
             if lk:
-                vx = cam_pos[0] - wp[0]
-                vy = cam_pos[1] - wp[1]
-                vz = cam_pos[2] - wp[2]
+                vx = shooter[0] - wp[0]
+                vy = shooter[1] - wp[1]
+                vz = shooter[2] - wp[2]
                 vd = math.sqrt(vx * vx + vy * vy + vz * vz)
                 if vd > 2.0:
                     dot = (lk[0] * vx + lk[1] * vy + lk[2] * vz) / vd
