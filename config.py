@@ -111,6 +111,15 @@ GAMES = {
         "max_esp_entries": 20,
         "roles": {},
     },
+    "town": {
+        "name": "town",
+        "enabled": True,
+        "place_id": "4991214437",
+        "no_closest_highlight": False,
+        "alt_characters": True,
+        "team_check": False,
+        "roles": {},
+    },
 }
 
 COLORS = {
@@ -206,7 +215,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "2.3.5"
+APP_VERSION = "2.3.6"
 
 
 

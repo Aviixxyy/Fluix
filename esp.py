@@ -249,13 +249,17 @@ class EspReader(threading.Thread):
             server_count = 0
 
         local = roblox.get_local_player(mem, players, offs)
+        if game_cfg and "team_check" in game_cfg:
+            team_check = bool(game_cfg["team_check"])
+        else:
+            team_check = bool(esp.get("team_check", True))
         team_color_teams = bool(game_cfg and game_cfg.get("team_color_teams"))
         if team_color_teams:
             tc = roblox.get_team_color(mem, local, offs) if local else 0
             local_team = "tc:{}".format(tc) if tc else ""
         else:
             local_team = roblox.get_team_name(mem, local, offs) if local else ""
-        no_team_data = bool(esp.get("team_check", True) and not local_team)
+        no_team_data = bool(team_check and not local_team)
         if no_team_data and not self._warned_no_team:
             self._warned_no_team = True
             status.log("[i] 'Hide teammates' is on but no team data was detected, "
@@ -348,7 +352,7 @@ class EspReader(threading.Thread):
 
             if not esp.get("show_local_player", False) and is_local:
                 continue
-            if (esp.get("team_check", True) and not is_local
+            if (team_check and not is_local
                     and not forced_teammate and local_team
                     and team == local_team):
                 skipped_team += 1
@@ -399,10 +403,11 @@ class EspReader(threading.Thread):
                     if len(self._look_cache) > 256:
                         self._look_cache.clear()
 
+            eff_team = team if team_check else ""
             entries.append({
                 "id": p,
                 "name": name,
-                "team": team,
+                "team": eff_team,
                 "forced_teammate": forced_teammate,
                 "health": health,
                 "max_health": max_health,
@@ -660,7 +665,7 @@ class EspReader(threading.Thread):
                 if not esp.get("show_local_player", False) and is_local:
                     t[2] += 1
                     continue
-                if esp.get("team_check", True) and not is_local and \
+                if team_check and not is_local and \
                         local_team and team_key == local_team:
                     t[3] += 1
                     skipped_team += 1
@@ -676,7 +681,7 @@ class EspReader(threading.Thread):
                     continue
                 entries.append({
                     "name": "",
-                    "team": team_key,
+                    "team": team_key if team_check else "",
                     "health": 100.0,
                     "max_health": 100.0,
                     "pos": pos,
