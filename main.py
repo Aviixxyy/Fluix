@@ -175,7 +175,25 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
             if target is None or d < target.get("distance", 1e18):
                 target = entry
 
-    for entry in snap["entries"]:
+    ents = snap["entries"]
+    if game_cfg and game_cfg.get("max_esp_entries") is not None:
+        cap = int(game_cfg["max_esp_entries"] or 0)
+    else:
+        cap = int(esp_cfg.get("max_esp_entries", 0) or 0)
+    if cap > 0 and len(ents) > cap:
+        enemies = []
+        mates = []
+        for e in ents:
+            if e.get("is_local"):
+                continue
+            (mates if (local_team and e.get("team") == local_team)
+             or e.get("forced_teammate") else enemies).append(e)
+        enemies.sort(key=lambda e: e.get("distance") or 1e18)
+        if len(enemies) > cap:
+            enemies = enemies[:cap]
+        ents = enemies + mates
+
+    for entry in ents:
         pos = entry["pos"]
         extents = entry.get("extents")
         if extents:
@@ -324,10 +342,11 @@ HUD_KEYS_TEXT = {
 }
 
 _aim = {"active": False, "angle": 0.0, "last_ts": 0.0, "lock": None,
-        "moving": False, "last_move": (0, 0), "override_until": 0.0,
-        "lock_ts": 0.0, "over_cnt": 0, "prev_dd": None, "drift_cnt": 0,
-        "rem_x": 0.0, "rem_y": 0.0, "sx": None, "sy": None, "settled": False,
-        "psx": None, "psy": None, "vx": 0.0, "vy": 0.0}
+        "lock_id": None, "moving": False, "last_move": (0, 0),
+        "override_until": 0.0, "lock_ts": 0.0, "over_cnt": 0,
+        "prev_dd": None, "drift_cnt": 0, "rem_x": 0.0, "rem_y": 0.0,
+        "sx": None, "sy": None, "settled": False, "psx": None, "psy": None,
+        "vx": 0.0, "vy": 0.0}
 
 _cur = {"x": 0.0, "y": 0.0}
 
@@ -379,6 +398,7 @@ def _check_override(hwnd, dt, frame_now, first_person):
     if _aim.get("over_cnt", 0) >= _OVERRIDE_FRAMES:
         _aim["active"] = False
         _aim["lock"] = None
+        _aim["lock_id"] = None
         _aim["over_cnt"] = 0
         _aim["override_until"] = frame_now + _OVERRIDE_LOCK_S
 
@@ -402,6 +422,7 @@ def _acquire(cand):
             cand[2][2] - _aim["lock"][2]) > _LOCK_STUDS:
         _aim["lock_ts"] = time.monotonic()
     _aim["lock"] = cand[2]
+    _aim["lock_id"] = cand[3] if len(cand) > 3 else None
 
 
 def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
@@ -424,9 +445,11 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
         max(1.0, float(aim_cfg.get("threat_fov_deg", 14.0)))))
     fallback_closest = bool(aim_cfg.get("fallback_closest", True))
     lock = _aim.get("lock")
+    lock_id = _aim.get("lock_id")
     best = None
     best_d = fov
     lock_cand = None
+    lock_cand_id = None
     lock_dd = None
     threat = None
     threat_dd = None
@@ -444,6 +467,7 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
         d = e.get("distance")
         if d is None or d > max_dist:
             continue
+        eid = e.get("id")
         pos = e["pos"]
         ext = e.get("extents")
         if aim_at == "torso":
@@ -475,22 +499,26 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
                     dot = (lk[0] * vx + lk[1] * vy + lk[2] * vz) / vd
                     if dot >= threat_cos and (
                             threat is None or dd < threat_dd):
-                        threat = (sp[0], sp[1], wp)
+                        threat = (sp[0], sp[1], wp, eid)
                         threat_dd = dd
         if fallback_closest:
             if far is None or d < far_d:
-                far = (sp[0], sp[1], wp)
+                far = (sp[0], sp[1], wp, eid)
                 far_d = d
-        if lock:
+        if lock_id is not None and eid == lock_id:
+            if dd <= fov * lock_keep:
+                lock_cand = (sp[0], sp[1], wp, eid)
+                lock_dd = dd
+        elif lock and eid is None:
             ldx = wp[0] - lock[0]
             ldy = wp[1] - lock[1]
             ldz = wp[2] - lock[2]
             if math.hypot(ldx, ldy, ldz) <= _LOCK_STUDS and dd <= fov * lock_keep:
-                lock_cand = (sp[0], sp[1], wp)
+                lock_cand = (sp[0], sp[1], wp, eid)
                 lock_dd = dd
         if dd <= best_d:
             best_d = dd
-            best = (sp[0], sp[1], wp)
+            best = (sp[0], sp[1], wp, eid)
     if threat is not None:
         _acquire(threat)
         return (threat[0], threat[1])
@@ -503,18 +531,25 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
         _aim["prev_dd"] = lock_dd
         if _aim["drift_cnt"] >= _DRIFT_FRAMES:
             _aim["lock"] = None
+            _aim["lock_id"] = None
             _aim["drift_cnt"] = 0
             _aim["prev_dd"] = None
             _aim["override_until"] = time.monotonic() + _RELEASE_PAUSE
             return None
+        _acquire(lock_cand)
         return (lock_cand[0], lock_cand[1])
     if best is not None:
+        if (lock_id is not None and best[3] is not None and best[3] != lock_id
+                and best_d <= fov * 0.85):
+            _aim["lock"] = None
+            _aim["lock_id"] = None
         _acquire(best)
         return (best[0], best[1])
     if fallback_closest and far is not None:
         _acquire(far)
         return (far[0], far[1])
     _aim["lock"] = None
+    _aim["lock_id"] = None
     _aim["drift_cnt"] = 0
     _aim["prev_dd"] = None
     return None

@@ -400,6 +400,7 @@ class EspReader(threading.Thread):
                         self._look_cache.clear()
 
             entries.append({
+                "id": p,
                 "name": name,
                 "team": team,
                 "forced_teammate": forced_teammate,

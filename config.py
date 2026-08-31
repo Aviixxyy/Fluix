@@ -36,6 +36,7 @@ ESP = {
     "extents_refresh_s": 1.5,
     "box_width_ratio": 0.5,
     "min_box_height": 1.5,
+    "max_esp_entries": 0,
     "camera_distance": 8.0,
     "fade_dead": True,
     "skip_dead": False,
@@ -100,6 +101,15 @@ GAMES = {
                 "teams": ["innocent", "civilian"],
             },
         },
+    },
+    "pordier_at_war": {
+        "name": "Pordier at War",
+        "enabled": True,
+        "place_id": "8791578652",
+        "no_closest_highlight": False,
+        "alt_characters": False,
+        "max_esp_entries": 20,
+        "roles": {},
     },
 }
 
@@ -196,7 +206,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "2.3.4"
+APP_VERSION = "2.3.5"
 
 
 
