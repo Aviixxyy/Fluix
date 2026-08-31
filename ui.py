@@ -1478,6 +1478,46 @@ class SettingsWindow:
         if TOOLTIPS.get(key):
             self._bind_tip((cell, tgl, txt), TOOLTIPS[key])
 
+    def _add_keybind(self, parent, row, label, tooltip=None, key_name="team_flip_key"):
+        frame = tk.Frame(parent, bg=CARD)
+        frame.grid(row=row, column=0, sticky="w", padx=(24, 16), pady=3)
+        tk.Label(frame, text=label, bg=CARD, fg=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        presets = {"G": 0x47, "B": 0x42, "H": 0x48, "N": 0x4E,
+                   "F2": 0x71, "F3": 0x72, "F4": 0x73}
+        cur = int(self.esp.get(key_name, 0) or 0)
+        var = tk.StringVar(value=("None" if cur == 0
+                                  else _vk_to_label(cur, presets)))
+        self._keybind_var = var
+        self._keybind_key = key_name
+        self._keybind_presets = presets
+        options = list(presets.keys()) + ["None", "Custom..."]
+        om = tk.OptionMenu(frame, var, *options,
+                           command=lambda name, k=key_name: self._on_keybind(name, k))
+        om.configure(bg=INPUT, fg=TEXT, activebackground=ACCENT,
+                     activeforeground="#ffffff", relief="flat",
+                     highlightthickness=1, highlightbackground=GHOST_BORDER,
+                     font=(FONT, 9), width=14)
+        menu = om["menu"]
+        menu.configure(bg=INPUT, fg=TEXT, activebackground=ACCENT,
+                       activeforeground="#ffffff", relief="flat",
+                       font=(FONT, 9))
+        om.pack(side="left", padx=(10, 0))
+        if tooltip:
+            self._bind_tip((frame, om), tooltip)
+        return frame
+
+    def _on_keybind(self, name, key_name):
+        if name == "Custom...":
+            self._begin_hotkey_capture("kb:" + key_name)
+            return
+        vk = 0
+        if name != "None":
+            vk = self._keybind_presets.get(name, 0)
+        self.esp[key_name] = vk
+        self._keybind_var.set("None" if vk == 0
+                              else _vk_to_label(vk, self._keybind_presets))
+
     def _add_reset_button(self, parent, key):
         row = tk.Frame(parent, bg=CARD)
         btn = AccentButton(row, "RESET TO DEFAULTS",
@@ -2006,7 +2046,14 @@ class SettingsWindow:
             self.aim["trigger_hotkey"] = vk
 
     def _capture_apply_vk(self, vk):
-        if getattr(self, "_capture_target", "aim") == "trigger":
+        target = getattr(self, "_capture_target", "aim")
+        if target.startswith("kb:"):
+            kname = target[len("kb:"):]
+            self.esp[kname] = vk
+            presets = getattr(self, "_keybind_presets", {})
+            self._keybind_var.set("None" if vk == 0
+                                  else _vk_to_label(vk, presets))
+        elif target == "trigger":
             self.aim["trigger_hotkey"] = vk
             self.trig_hot.set(_vk_to_label(vk, self.trig_hot_options))
         else:
@@ -2017,7 +2064,9 @@ class SettingsWindow:
         self._finish_hotkey_capture()
         self._capture_target = target
         self._capturing = True
-        if target == "trigger":
+        if target.startswith("kb:"):
+            self._keybind_var.set("Press a key...")
+        elif target == "trigger":
             self.trig_hot.set("Press a key...")
         else:
             self.aim_hot.set("Press a key...")
@@ -2066,7 +2115,14 @@ class SettingsWindow:
             self._mouse_after = None
         if getattr(self, "_capturing", False):
             self._capturing = False
-            if getattr(self, "_capture_target", "aim") == "trigger":
+            target = getattr(self, "_capture_target", "aim")
+            if target.startswith("kb:"):
+                kname = target[len("kb:"):]
+                presets = getattr(self, "_keybind_presets", {})
+                kv = int(self.esp.get(kname, 0) or 0)
+                self._keybind_var.set("None" if kv == 0
+                                      else _vk_to_label(kv, presets))
+            elif target == "trigger":
                 self.trig_hot.set(_vk_to_label(
                     self.aim.get("trigger_hotkey", 0x05),
                     self.trig_hot_options))
@@ -2462,6 +2518,9 @@ class SettingsWindow:
                  bg=CARD, fg=MUTED, font=(FONT, 8), justify="left",
                  wraplength=540).grid(row=1, column=0, columnspan=2,
                                       sticky="w", padx=(36, 0), pady=(2, 0))
+        self._add_keybind(card.body, 2, "Team flip key",
+                          "Swaps which team the ESP treats as yours. "
+                          "Leave unbound to disable.", key_name="team_flip_key")
         self._add_reset_button(card.body, "misc")
 
     def _on_preset_change(self, name):

@@ -26,6 +26,8 @@ ESP = {
     "tool": False,
     "tool_refresh_s": 0.5,
     "team_check": True,
+    "team_flip": False,
+    "team_flip_key": 0,
     "exceptions": "",
     "show_local_player": False,
     "max_distance": 1500.0,
@@ -206,7 +208,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "2.3.5"
+APP_VERSION = "2.3.6"
 
 
 

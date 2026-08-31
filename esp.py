@@ -350,7 +350,7 @@ class EspReader(threading.Thread):
                 continue
             if (esp.get("team_check", True) and not is_local
                     and not forced_teammate and local_team
-                    and team == local_team):
+                    and (team == local_team) != bool(esp.get("team_flip", False))):
                 skipped_team += 1
                 continue
             if distance is not None and distance > esp.get("max_distance", 300.0):
@@ -661,7 +661,8 @@ class EspReader(threading.Thread):
                     t[2] += 1
                     continue
                 if esp.get("team_check", True) and not is_local and \
-                        local_team and team_key == local_team:
+                        local_team and (team_key == local_team) != \
+                        bool(esp.get("team_flip", False)):
                     t[3] += 1
                     skipped_team += 1
                     continue

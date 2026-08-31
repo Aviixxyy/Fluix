@@ -150,7 +150,7 @@ def _format_distance(studs, units):
     return "{} studs".format(int(round(studs)))
 
 
-def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
+def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None, team_flip=False):
     cam = snap["camera"]
     if not cam:
         return
@@ -186,7 +186,7 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
         for e in ents:
             if e.get("is_local"):
                 continue
-            (mates if (local_team and e.get("team") == local_team)
+            (mates if (local_team and (e.get("team") == local_team) != team_flip)
              or e.get("forced_teammate") else enemies).append(e)
         enemies.sort(key=lambda e: e.get("distance") or 1e18)
         if len(enemies) > cap:
@@ -206,7 +206,7 @@ def _draw_entities(overlay, snap, esp_cfg, colors, vw, vh, game_cfg=None):
         mid = (pos[0], (foot_y + head_y) * 0.5, pos[2])
         dead = bool(entry.get("health", 1.0) <= 0.0)
         fade = bool(esp_cfg.get("fade_dead", True)) and dead
-        teammate = bool(local_team and entry.get("team") == local_team) \
+        teammate = bool(local_team and (entry.get("team") == local_team) != team_flip) \
             or bool(entry.get("forced_teammate"))
         dead_color = colors.get("dead", (125, 125, 138))
         role = entry.get("role")
@@ -425,7 +425,7 @@ def _acquire(cand):
     _aim["lock_id"] = cand[3] if len(cand) > 3 else None
 
 
-def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
+def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center, team_flip=False):
     global _aim
     cam = snap.get("camera")
     if not cam:
@@ -462,7 +462,7 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
             continue
         if e.get("forced_teammate"):
             continue
-        if team_check and local_team and e.get("team") == local_team:
+        if team_check and local_team and (e.get("team") == local_team) != team_flip:
             continue
         d = e.get("distance")
         if d is None or d > max_dist:
@@ -760,7 +760,7 @@ def _seg_hits_rect(x0, y0, x1, y1, l, t, r, b):
     return t0 <= t1
 
 
-def _trigger_hit(snap, esp_cfg, vw, vh, center, prev=None, pad=1.15):
+def _trigger_hit(snap, esp_cfg, vw, vh, center, prev=None, pad=1.15, team_flip=False):
     cam = snap.get("camera")
     if not cam:
         return False
@@ -780,7 +780,7 @@ def _trigger_hit(snap, esp_cfg, vw, vh, center, prev=None, pad=1.15):
             continue
         if e.get("forced_teammate"):
             continue
-        if team_check and local_team and e.get("team") == local_team:
+        if team_check and local_team and (e.get("team") == local_team) != team_flip:
             continue
         d = e.get("distance")
         if d is None or d > max_dist:
@@ -1059,7 +1059,7 @@ def main():
     reader.start()
     status.set(esp=True)
 
-    print("[i] Controls: F8 = toggle ESP   F7 = settings   END = quit")
+    print("[i] Controls: F8 = toggle ESP   F7 = settings   F9 = team flip   END = quit")
 
     game_hwnd = 0
     overlay = None
@@ -1109,6 +1109,14 @@ def main():
 
         if ui_mod is not None and _pressed(config.KEYS.get("settings", 0)):
             ui_mod.request_toggle()
+
+        if _pressed(int(config.ESP.get("team_flip_key", 0) or 0)):
+            config.ESP["team_flip"] = not config.ESP.get("team_flip", False)
+            tf = config.ESP["team_flip"]
+            status.log("[i] Team flip {}".format("ON - colors swapped" if tf else "OFF"))
+            hud_state["hint"] = "Team flip {} - colors swapped".format(
+                "ON" if tf else "OFF")
+            hud_state["hint_until"] = time.monotonic() + 2.5
 
         if not mem.alive():
             if mem.reopen():
@@ -1217,7 +1225,8 @@ def main():
                               & 0x8000)
             if aim_on:
                 aim_point = _aim_target(snap, aim_cfg, config.ESP,
-                                        overlay.w, overlay.h, aim_center)
+                                        overlay.w, overlay.h, aim_center,
+                                        team_flip=config.ESP.get("team_flip", False))
                 _aim_tick(dt, aim_point, aim_cfg,
                           aim_center[0], aim_center[1])
             else:
@@ -1237,7 +1246,8 @@ def main():
                 if _trigger_hit(snap, config.ESP, overlay.w, overlay.h,
                                 aim_center, trig_prev,
                                 float(aim_cfg.get("trigger_padding",
-                                                  1.15))):
+                                                  1.15)),
+                                team_flip=config.ESP.get("team_flip", False)):
                     _send_click()
                     _aim["trig_last"] = frame_now
         _aim["trig_prev"] = (aim_center[0], aim_center[1])
@@ -1250,7 +1260,8 @@ def main():
                 game = snap.get("game")
                 game_cfg = config.GAMES.get(game) if game else None
                 _draw_entities(overlay, snap, config.ESP, config.COLORS,
-                               overlay.w, overlay.h, game_cfg)
+                               overlay.w, overlay.h, game_cfg,
+                               team_flip=config.ESP.get("team_flip", False))
             if (aim_cfg.get("enabled", False)
                     and aim_cfg.get("show_fov", True)):
                 fov_r = max(4.0, float(aim_cfg.get("fov_px", 250.0)))
