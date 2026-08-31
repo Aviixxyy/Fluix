@@ -253,6 +253,11 @@ class EspReader(threading.Thread):
             team_check = bool(game_cfg["team_check"])
         else:
             team_check = bool(esp.get("team_check", True))
+        if game_cfg and "skip_dead" in game_cfg:
+            skip_dead = bool(game_cfg["skip_dead"])
+        else:
+            skip_dead = bool(esp.get("skip_dead", False))
+        corpse_filter = bool(esp.get("corpse_filter", True))
         team_color_teams = bool(game_cfg and game_cfg.get("team_color_teams"))
         if team_color_teams:
             tc = roblox.get_team_color(mem, local, offs) if local else 0
@@ -343,6 +348,41 @@ class EspReader(threading.Thread):
             else:
                 team = roblox.get_team_name(mem, p, offs)
             is_local = bool(local and p == local)
+            if corpse_filter and not is_local and extents:
+                h = max(0.1, extents[1] - extents[0])
+                mrec = self._rig_motion.get(char)
+                corpse = False
+                if mrec is None:
+                    self._rig_motion[char] = [pos, now, now, 0.0, h, 0.0, 1]
+                else:
+                    prev_h = mrec[4] if len(mrec) > 4 else h
+                    if len(mrec) < 7:
+                        mrec.extend([h, 0.0, 1])
+                    else:
+                        mrec[4] = h
+                    if prev_h >= 4.5 and h <= 2.7:
+                        corpse = True
+                    if h <= 2.7:
+                        if not mrec[5]:
+                            mrec[5] = now
+                        elif now - mrec[5] > 2.0:
+                            corpse = True
+                    else:
+                        mrec[5] = 0.0
+                    mdx = pos[0] - mrec[0][0]
+                    mdy = pos[1] - mrec[0][1]
+                    mdz = pos[2] - mrec[0][2]
+                    mdd = mdx * mdx + mdy * mdy + mdz * mdz
+                    if mdd > 0.09:
+                        mrec[0] = pos
+                        mrec[2] = now
+                        mrec[3] = mrec[3] + math.sqrt(mdd)
+                    elif now - mrec[2] > 3.5 or \
+                            (mrec[2] == mrec[1] and now - mrec[1] > 0.8):
+                        corpse = True
+                if corpse:
+                    skipped_dead += 1
+                    continue
 
             distance = None
             if local_pos and pos:
@@ -365,7 +405,7 @@ class EspReader(threading.Thread):
             max_health = mem.f32(humanoid + roblox.O(offs, "Humanoid", "MaxHealth"))
             if max_health <= 0:
                 max_health = 100.0
-            if esp.get("skip_dead", False) and health <= 0:
+            if skip_dead and health <= 0:
                 skipped_dead += 1
                 continue
 

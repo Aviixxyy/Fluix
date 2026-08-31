@@ -425,7 +425,7 @@ def _acquire(cand):
     _aim["lock_id"] = cand[3] if len(cand) > 3 else None
 
 
-def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
+def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center, cursor_priority=False):
     global _aim
     cam = snap.get("camera")
     if not cam:
@@ -519,6 +519,14 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center):
         if dd <= best_d:
             best_d = dd
             best = (sp[0], sp[1], wp, eid)
+    if cursor_priority and best is not None:
+        deadzone = float(aim_cfg.get("cursor_deadzone", 0.35)) * fov
+        if best_d <= deadzone:
+            if _aim.get("lock_id") is not None and best[3] != _aim.get("lock_id"):
+                _aim["lock"] = None
+                _aim["lock_id"] = None
+            _acquire(best)
+            return (best[0], best[1])
     if threat is not None:
         _acquire(threat)
         return (threat[0], threat[1])
@@ -1216,8 +1224,15 @@ def main():
                 aim_on = bool(overlay_mod.user32.GetAsyncKeyState(VK_LBUTTON)
                               & 0x8000)
             if aim_on:
+                snap_game = snap.get("game")
+                _cursor_prio = False
+                if snap_game:
+                    _gc = config.GAMES.get(snap_game)
+                    if _gc and _gc.get("aim_cursor_priority", False):
+                        _cursor_prio = True
                 aim_point = _aim_target(snap, aim_cfg, config.ESP,
-                                        overlay.w, overlay.h, aim_center)
+                                        overlay.w, overlay.h, aim_center,
+                                        cursor_priority=_cursor_prio)
                 _aim_tick(dt, aim_point, aim_cfg,
                           aim_center[0], aim_center[1])
             else:
