@@ -165,6 +165,8 @@ AIMBOT = {
     "lock_keep": 1.5,
     "threat_first": True,
     "threat_fov_deg": 14.0,
+    "cursor_priority": True,
+    "cursor_deadzone": 0.35,
     "fallback_closest": True,
     "show_fov": True,
     "trigger": False,
@@ -208,7 +210,7 @@ FONT_SIZE = 14
 
 THEME = "fluix"
 
-APP_VERSION = "2.3.6"
+APP_VERSION = "2.3.7"
 
 
 

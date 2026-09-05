@@ -362,6 +362,9 @@ TOOLTIPS = {
                         "is nearest your crosshair.",
     "aim_threat_cone": "How precisely an enemy must be looking at you to "
                        "count as a threat. Smaller = stricter.",
+    "aim_cursor_priority": "When a target is close to your crosshair, it "
+                           "wins over threats and locks. Great for "
+                           "fighting multiple people.",
     "aim_fallback_closest": "When nothing is inside the aim FOV, ease onto "
                             "the closest visible enemy anyway.",
     "aim_mode": "HOLD aims while you hold the key. ON FIRE aims while you "
@@ -2005,6 +2008,22 @@ class SettingsWindow:
             float(self.aim.get("threat_fov_deg", 14.0))))
         self._bind_tip((cone_row, self.aim_cone),
                        TOOLTIPS["aim_threat_cone"])
+
+        cp_row = g_next(sticky="we")
+        cp_var = tk.BooleanVar(value=bool(self.aim.get("cursor_priority",
+                                                       True)))
+        self.aim_cursor_priority = cp_var
+        cp_tgl = Toggle(cp_row, value=cp_var.get())
+        cp_tgl.command = lambda t=cp_tgl: (cp_var.set(t.get()),
+                                           self.aim.__setitem__(
+                                               "cursor_priority", t.get()))
+        cp_tgl.pack(side="left")
+        cp_txt = tk.Label(cp_row, text="Prioritize what's under cursor",
+                          bg=CARD, fg=TEXT, font=(FONT, 9), cursor="hand2")
+        cp_txt.pack(side="left", padx=(8, 0))
+        cp_txt.bind("<Button-1>", lambda e, t=cp_tgl: t.set(not t.get()))
+        self._bind_tip((cp_row, cp_tgl, cp_txt),
+                       TOOLTIPS["aim_cursor_priority"])
 
         fb_row = g_next(sticky="we")
         fb_var = tk.BooleanVar(value=bool(self.aim.get("fallback_closest",

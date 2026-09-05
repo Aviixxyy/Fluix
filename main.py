@@ -444,6 +444,8 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center, team_flip=False):
     threat_cos = math.cos(math.radians(
         max(1.0, float(aim_cfg.get("threat_fov_deg", 14.0)))))
     fallback_closest = bool(aim_cfg.get("fallback_closest", True))
+    cursor_priority = bool(aim_cfg.get("cursor_priority", True))
+    cursor_deadzone = float(aim_cfg.get("cursor_deadzone", 0.35)) * fov
     lock = _aim.get("lock")
     lock_id = _aim.get("lock_id")
     best = None
@@ -519,6 +521,12 @@ def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center, team_flip=False):
         if dd <= best_d:
             best_d = dd
             best = (sp[0], sp[1], wp, eid)
+    if cursor_priority and best is not None and best_d <= cursor_deadzone:
+        if _aim.get("lock_id") is not None and best[3] != _aim.get("lock_id"):
+            _aim["lock"] = None
+            _aim["lock_id"] = None
+        _acquire(best)
+        return (best[0], best[1])
     if threat is not None:
         _acquire(threat)
         return (threat[0], threat[1])
