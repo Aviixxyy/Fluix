@@ -255,7 +255,10 @@ class EspReader(threading.Thread):
             local_team = "tc:{}".format(tc) if tc else ""
         else:
             local_team = roblox.get_team_name(mem, local, offs) if local else ""
-        no_team_data = bool(esp.get("team_check", True) and not local_team)
+        team_check = bool(esp.get("team_check", True))
+        if game_cfg is not None and "team_check" in game_cfg:
+            team_check = bool(game_cfg["team_check"])
+        no_team_data = bool(team_check and not local_team)
         if no_team_data and not self._warned_no_team:
             self._warned_no_team = True
             status.log("[i] 'Hide teammates' is on but no team data was detected, "
@@ -348,7 +351,7 @@ class EspReader(threading.Thread):
 
             if not esp.get("show_local_player", False) and is_local:
                 continue
-            if (esp.get("team_check", True) and not is_local
+            if (team_check and not is_local
                     and not forced_teammate and local_team
                     and (team == local_team) != bool(esp.get("team_flip", False))):
                 skipped_team += 1
@@ -420,6 +423,7 @@ class EspReader(threading.Thread):
 
         alt_count = 0
         alt_tally = {}
+        alt_models = []
         if not entries and (game_cfg is None or game_cfg.get("alt_characters", False)):
             alt_ts, alt_cached = self._alt_cache
             alt_models = []
@@ -660,7 +664,7 @@ class EspReader(threading.Thread):
                 if not esp.get("show_local_player", False) and is_local:
                     t[2] += 1
                     continue
-                if esp.get("team_check", True) and not is_local and \
+                if team_check and not is_local and \
                         local_team and (team_key == local_team) != \
                         bool(esp.get("team_flip", False)):
                     t[3] += 1

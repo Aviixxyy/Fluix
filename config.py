@@ -113,6 +113,16 @@ GAMES = {
         "max_esp_entries": 20,
         "roles": {},
     },
+    "defusal": {
+        "name": "Defusal",
+        "enabled": True,
+        "place_id": "79393329652220",
+        "no_closest_highlight": False,
+        "alt_characters": False,
+        "team_color_teams": True,
+        "team_check": False,
+        "roles": {},
+    },
 }
 
 COLORS = {

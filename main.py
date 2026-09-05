@@ -425,13 +425,16 @@ def _acquire(cand):
     _aim["lock_id"] = cand[3] if len(cand) > 3 else None
 
 
-def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center, team_flip=False):
+def _aim_target(snap, aim_cfg, esp_cfg, vw, vh, center, team_flip=False,
+                game_cfg=None):
     global _aim
     cam = snap.get("camera")
     if not cam:
         return None
     local_team = snap.get("local_team", "")
     team_check = bool(esp_cfg.get("team_check", True))
+    if game_cfg is not None and "team_check" in game_cfg:
+        team_check = bool(game_cfg["team_check"])
     max_dist = float(aim_cfg.get("max_distance", 300.0))
     fov = float(aim_cfg.get("fov_px", 250.0))
     aim_at = aim_cfg.get("target", "head")
@@ -760,12 +763,15 @@ def _seg_hits_rect(x0, y0, x1, y1, l, t, r, b):
     return t0 <= t1
 
 
-def _trigger_hit(snap, esp_cfg, vw, vh, center, prev=None, pad=1.15, team_flip=False):
+def _trigger_hit(snap, esp_cfg, vw, vh, center, prev=None, pad=1.15,
+                 team_flip=False, game_cfg=None):
     cam = snap.get("camera")
     if not cam:
         return False
     local_team = snap.get("local_team", "")
     team_check = bool(esp_cfg.get("team_check", True))
+    if game_cfg is not None and "team_check" in game_cfg:
+        team_check = bool(game_cfg["team_check"])
     max_dist = float(esp_cfg.get("max_distance", 1500.0))
     height = float(esp_cfg.get("character_height", 5.0))
     ratio = float(esp_cfg.get("hrp_ratio", 0.45))
@@ -1226,7 +1232,8 @@ def main():
             if aim_on:
                 aim_point = _aim_target(snap, aim_cfg, config.ESP,
                                         overlay.w, overlay.h, aim_center,
-                                        team_flip=config.ESP.get("team_flip", False))
+                                        team_flip=config.ESP.get("team_flip", False),
+                                        game_cfg=config.GAMES.get(snap.get("game")) if snap.get("game") else None)
                 _aim_tick(dt, aim_point, aim_cfg,
                           aim_center[0], aim_center[1])
             else:
@@ -1246,8 +1253,9 @@ def main():
                 if _trigger_hit(snap, config.ESP, overlay.w, overlay.h,
                                 aim_center, trig_prev,
                                 float(aim_cfg.get("trigger_padding",
-                                                  1.15)),
-                                team_flip=config.ESP.get("team_flip", False)):
+                                                   1.15)),
+                                team_flip=config.ESP.get("team_flip", False),
+                                game_cfg=config.GAMES.get(snap.get("game")) if snap.get("game") else None):
                     _send_click()
                     _aim["trig_last"] = frame_now
         _aim["trig_prev"] = (aim_center[0], aim_center[1])
